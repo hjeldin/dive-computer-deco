@@ -1,10 +1,12 @@
 #[cfg(feature="std")]
 use std::println;
 use defmt::Format;
-use crate::{calculate_tissue, DiveParameters, Tissue};
+use crate::{DiveParameters};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use crate::tissue::{calculate_tissue, Tissue};
+
 #[cfg(feature = "serde")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SimulationOutputs {
@@ -35,8 +37,8 @@ impl SimulationOutputs {
     }
 }
 
-pub fn simulate(params: DiveParameters, tissues: &mut [Tissue; 16], starting_ambient_pressure: f32, target_depth: f32, temperature: f32, interval_in_seconds: f32, bottom_time_seconds: f32) -> SimulationOutputs {
-    let mut outputs = SimulationOutputs::new();
+pub fn simulate(params: &mut DiveParameters, tissues: &mut [Tissue; 16], starting_ambient_pressure: f32, target_depth: f32, temperature: f32, interval_in_seconds: f32, bottom_time_seconds: f32) -> SimulationOutputs {
+    let outputs = SimulationOutputs::new();
     let mut amb_pressure = starting_ambient_pressure;
     let mut depth = 0.0;
     let mut dive_time = 0.0;
@@ -60,9 +62,10 @@ pub fn simulate(params: DiveParameters, tissues: &mut [Tissue; 16], starting_amb
                 outputs.depths.push(depth);
                 outputs.pressures.push(amb_pressure);
             }
+            #[cfg(feature = "serde")]
             let mut instantTissues = [Tissue::default(); 16];
             for i in 0..16 {
-                tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, 1.0/60.0);
+                tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, interval_in_seconds/60.0);
                 #[cfg(feature = "serde")]
                 if(dive_time % 60.0 == 0.0) {
                     instantTissues[i] = tissues[i];
@@ -75,7 +78,7 @@ pub fn simulate(params: DiveParameters, tissues: &mut [Tissue; 16], starting_amb
         }
         if bottom {
             dive_time += interval_in_seconds;
-            if dive_time - descent_time >= bottom_time_seconds {
+            if dive_time >= bottom_time_seconds {
                 #[cfg(feature = "std")]
                 println!("Reached ascent phase after {}s", dive_time);
                 break;
@@ -85,6 +88,7 @@ pub fn simulate(params: DiveParameters, tissues: &mut [Tissue; 16], starting_amb
                 outputs.depths.push(depth);
                 outputs.pressures.push(amb_pressure);
             }
+            #[cfg(feature = "serde")]
             let mut instantTissues = [Tissue::default(); 16];
             for i in 0..16 {
                 tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, 1.0/60.0);
