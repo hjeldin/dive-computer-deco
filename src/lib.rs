@@ -3,9 +3,7 @@
 #[cfg(feature="std")]
 use std::println;
 
-#[cfg(feature="std")]
-use std::vec::Vec;
-use defmt::{Format};
+use defmt::Format;
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -74,7 +72,6 @@ pub const FHE: f32 = 0.0;
 
 use crate::ceiling::max_ceiling;
 use crate::m_value::calculate_m_values;
-use crate::simulate::simulate;
 use crate::tissue::{calculate_tissue, Tissue};
 
 
@@ -84,7 +81,7 @@ pub fn default_tissue_load(temperature: f32) -> f32 {
 }
 
 // at 37 deg celsius should return 0.0627 bar (47 mmHg)
-pub fn water_vapor_pressure(temperature: f32) -> f32 {
+pub fn water_vapor_pressure(_temperature: f32) -> f32 {
     // Water vapor pressure in bar
     // Antoine equation
     // P = 10^(A - B / (C + T))
@@ -109,7 +106,7 @@ pub enum DecoError {
 }
 
 
-pub fn run_no_deco_loop(dive_parameters: &mut DiveParameters, tissues: &mut [Tissue; 16], amb_pressure: f32, temperature: f32, delta_t: f32) -> Result<(), DecoError> {
+pub fn run_no_deco_loop(_dive_parameters: &mut DiveParameters, tissues: &mut [Tissue; 16], amb_pressure: f32, temperature: f32, delta_t: f32) -> Result<(), DecoError> {
     for i in 0..16 {
         tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, delta_t);
         defmt::info!("{:?} - {:?}", i, tissues[i].load_n2);
@@ -122,7 +119,7 @@ pub fn run_no_deco_loop(dive_parameters: &mut DiveParameters, tissues: &mut [Tis
     Ok(())
 }
 
-pub fn calculate_deco_stops(dive_parameters: DiveParameters, tissues: &mut [Tissue; 16], amb_pressure: f32, temperature: f32) -> Result<(), DecoError> {
+pub fn calculate_deco_stops(dive_parameters: DiveParameters, tissues: &mut [Tissue; 16], _amb_pressure: f32, temperature: f32) -> Result<(), DecoError> {
     let first_stop = max_ceiling(dive_parameters, tissues);
     let last_stop: i32 = 3;
     #[cfg(feature = "std")]
@@ -169,24 +166,26 @@ pub fn calculate_deco_stops(dive_parameters: DiveParameters, tissues: &mut [Tiss
 #[cfg(feature = "std")]
 #[test]
 fn test_deco_stops() {
+    use crate::simulate::simulate;
     let mut tissues = [Tissue::default(); 16];
     let temperature = 20.0;
-    let mut amb_pressure = 1.0;
+    let amb_pressure = 1.0;
     for i in 0..tissues.len() {
         tissues[i].load_n2 = (amb_pressure - water_vapor_pressure(temperature)) * FN2;
         tissues[i].load_he = (amb_pressure - water_vapor_pressure(temperature)) * FHE;
     }
 
     let simulation = simulate(&mut DiveParameters::default(), &mut tissues, 1.0, 50.0, temperature, 1.0, 20.0 * 60.0);
-    // println!("{:?}", simulation);
+    println!("{:?}", simulation);
 
-    let result = calculate_deco_stops(DiveParameters::default(), &mut tissues, amb_pressure, temperature);
+    let _result = calculate_deco_stops(DiveParameters::default(), &mut tissues, amb_pressure, temperature);
 }
 
 #[cfg(feature = "std")]
 #[test]
 fn test_deco_loop() {
     use csv::Reader;
+    use std::vec::Vec;
     let mut rdr = Reader::from_path("depth.csv").unwrap();
     let mut tissues = [Tissue::default(); 16];
     let mut depth: Vec<f32> = Vec::new();
@@ -214,7 +213,6 @@ fn test_deco_loop() {
             Err(e) => {
                 println!("DECO NOW MANDATORY: {:?}", e);
                 panic!("wtf");
-                return;
             }
         }
     }

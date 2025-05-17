@@ -1,9 +1,3 @@
-#[cfg(feature="std")]
-use std::println;
-#[cfg(feature="std")]
-use std::string::ToString;
-#[cfg(feature="std")]
-use std::vec::Vec;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -13,17 +7,26 @@ use crate::{water_vapor_pressure, FHE, FN2};
 use crate::zh16c::ZhL16cGf;
 
 #[cfg(feature = "serde")]
-#[derive(Default, Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Tissue {
     pub load_n2: f32,
     pub load_he: f32,
 }
 
 #[cfg(not(feature = "serde"))]
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Tissue {
     pub load_n2: f32,
     pub load_he: f32,
+}
+
+impl Default for Tissue {
+    fn default() -> Self {
+        Tissue {
+            load_n2: 1.0,
+            load_he: 1.0,
+        }
+    }
 }
 
 impl Format for Tissue {
@@ -78,6 +81,86 @@ pub fn calculate_tissue(
 }
 
 #[test]
+fn test_calculate_tissue_no_change() {
+    let tissue = Tissue {
+        load_n2: 2.0,
+        load_he: 1.0,
+    };
+    let amb_pressure = 3.0;
+    let temperature = 20.0;
+    let time_since_last_check = 0.0; // no time has passed
+
+    let result = calculate_tissue(tissue, 0, amb_pressure, temperature, time_since_last_check);
+
+    assert_eq!(result.load_n2, tissue.load_n2);
+    assert_eq!(result.load_he, tissue.load_he);
+}
+
+#[test]
+fn test_calculate_tissue_with_time() {
+    let tissue = Tissue {
+        load_n2: 2.0,
+        load_he: 1.0,
+    };
+    let amb_pressure = 4.0;
+    let temperature = 20.0;
+    let time_since_last_check = 1.0; // 1 minute has passed
+
+    let result = calculate_tissue(tissue, 0, amb_pressure, temperature, time_since_last_check);
+
+    assert!(result.load_n2 > tissue.load_n2);
+    // assert!(result.load_he > tissue.load_he);
+}
+
+#[test]
+fn test_calculate_tissue_with_zero_ambient_pressure() {
+    let tissue = Tissue {
+        load_n2: 2.0,
+        load_he: 1.0,
+    };
+    let amb_pressure = 0.1; // unrealistic, but for edge case testing
+    let temperature = 20.0;
+    let time_since_last_check = 1.0;
+
+    let result = calculate_tissue(tissue, 0, amb_pressure, temperature, time_since_last_check);
+
+    assert!(result.load_n2 < tissue.load_n2);
+    // assert!(result.load_he < tissue.load_he);
+}
+
+#[test]
+fn test_calculate_tissue_with_high_ambient_pressure() {
+    let tissue = Tissue {
+        load_n2: 2.0,
+        load_he: 1.0,
+    };
+    let amb_pressure = 10.0; // high ambient pressure
+    let temperature = 20.0;
+    let time_since_last_check = 1.0;
+
+    let result = calculate_tissue(tissue, 0, amb_pressure, temperature, time_since_last_check);
+
+    assert!(result.load_n2 > tissue.load_n2);
+    // assert!(result.load_he > tissue.load_he);
+}
+
+#[test]
+fn test_calculate_tissue_with_negative_time() {
+    let tissue = Tissue {
+        load_n2: 2.0,
+        load_he: 1.0,
+    };
+    let amb_pressure = 4.0;
+    let temperature = 20.0;
+    let time_since_last_check = -1.0; // negative time, should not happen in practice
+
+    let result = calculate_tissue(tissue, 0, amb_pressure, temperature, time_since_last_check);
+
+    assert!(result.load_n2 < tissue.load_n2);
+    // assert_eq!(result.load_he, tissue.load_he);
+}
+
+#[test]
 fn test_calculate_tissues() {
     let mut tissues = [Tissue::default(); 16];
     let temperature = 20.0;
@@ -102,6 +185,9 @@ fn test_calculate_tissues() {
 fn calculate_tissues_from_csv() {
     use csv::Reader;
     use csv::Writer;
+    use std::println;
+    use std::string::ToString;
+    use std::vec::Vec;
 
     let mut rdr = Reader::from_path("depth.csv").unwrap();
     let mut tissues = [Tissue::default(); 16];
