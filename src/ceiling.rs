@@ -1,8 +1,8 @@
-#[cfg(feature="std")]
-use std::println;
-use crate::DiveParameters;
 use crate::tissue::Tissue;
 use crate::zh16c::ZhL16cGf;
+use crate::DiveParameters;
+#[cfg(feature = "std")]
+use std::println;
 
 #[inline(never)]
 pub fn ceiling(dive_parameters: DiveParameters, tissue: Tissue, tissue_index: usize) -> u32 {
@@ -21,9 +21,9 @@ pub fn ceiling(dive_parameters: DiveParameters, tissue: Tissue, tissue_index: us
     // let r = ((p_total) - a * dive_parameters.gf_high) * (b / (dive_parameters.gf_high - (dive_parameters.gf_high * b) + b));
     // let mut result_bar = (p_total) - a * dive_parameters.gf_high;
     // result_bar /= (dive_parameters.gf_high / b) + 1.0 - dive_parameters.gf_high;
-    let result_bar = (b * p_total - dive_parameters.gf_low * a * b) / 
-                    ((1.0 - b) * dive_parameters.gf_low + b);
-    
+    let result_bar =
+        (b * p_total - dive_parameters.gf_low * a * b) / ((1.0 - b) * dive_parameters.gf_low + b);
+
     // the result is in bars, we need to convert it to meters
     let result_meters = (result_bar - 1.0) * 10.0;
 
@@ -31,7 +31,12 @@ pub fn ceiling(dive_parameters: DiveParameters, tissue: Tissue, tissue_index: us
     let ceiling = ((result_meters + 2.999) / 3.0) as u32 * 3;
     // let rounded_ceiling = (ceiling * 3.0) as f32;
     #[cfg(feature = "std")]
-    println!("Tissue: {:?} \t Ceil (nr): {:.5} \t Ceil: {:.5}", tissue_index + 1, result_meters, ceiling);
+    println!(
+        "Tissue: {:?} \t Ceil (nr): {:.5} \t Ceil: {:.5}",
+        tissue_index + 1,
+        result_meters,
+        ceiling
+    );
     ceiling
 }
 
@@ -49,7 +54,6 @@ pub fn max_ceiling(dive_parameters: DiveParameters, tissues: &[Tissue; 16]) -> (
     (max_ceiling, tissue_index)
 }
 
-
 #[test]
 fn test_ceiling_with_high_n2_load() {
     let tissue = Tissue {
@@ -59,7 +63,10 @@ fn test_ceiling_with_high_n2_load() {
 
     let tissue_index = 2;
     let result = ceiling(DiveParameters::default(), tissue, tissue_index);
-    assert!(result > 0, "Ceiling should be greater than 0 for high N2 load");
+    assert!(
+        result > 0,
+        "Ceiling should be greater than 0 for high N2 load"
+    );
 }
 
 #[test]
@@ -71,7 +78,10 @@ fn test_ceiling_with_high_he_load() {
 
     let tissue_index = 3;
     let result = ceiling(DiveParameters::default(), tissue, tissue_index);
-    assert!(result > 0, "Ceiling should be greater than 0 for high He load");
+    assert!(
+        result > 0,
+        "Ceiling should be greater than 0 for high He load"
+    );
 }
 
 #[test]
@@ -83,28 +93,79 @@ fn test_ceiling_with_balanced_loads() {
 
     let tissue_index = 4;
     let result = ceiling(DiveParameters::default(), tissue, tissue_index);
-    assert!(result > 0, "Ceiling should be greater than 0 for balanced gas loads");
+    assert!(
+        result > 0,
+        "Ceiling should be greater than 0 for balanced gas loads"
+    );
 }
 
 #[test]
 fn test_max_ceiling_with_multiple_tissues() {
     let tissues = [
-        Tissue { load_n2: 3.0, load_he: 0.0 },
-        Tissue { load_n2: 2.0, load_he: 1.0 },
-        Tissue { load_n2: 1.0, load_he: 2.0 },
-        Tissue { load_n2: 0.5, load_he: 0.5 },
-        Tissue { load_n2: 4.0, load_he: 0.0 },
-        Tissue { load_n2: 0.0, load_he: 4.0 },
-        Tissue { load_n2: 2.5, load_he: 2.5 },
-        Tissue { load_n2: 1.5, load_he: 1.5 },
-        Tissue { load_n2: 3.5, load_he: 0.5 },
-        Tissue { load_n2: 0.5, load_he: 3.5 },
-        Tissue { load_n2: 2.0, load_he: 2.0 },
-        Tissue { load_n2: 1.0, load_he: 1.0 },
-        Tissue { load_n2: 0.0, load_he: 0.0 },
-        Tissue { load_n2: 5.0, load_he: 0.0 },
-        Tissue { load_n2: 0.0, load_he: 5.0 },
-        Tissue { load_n2: 3.0, load_he: 3.0 },
+        Tissue {
+            load_n2: 3.0,
+            load_he: 0.0,
+        },
+        Tissue {
+            load_n2: 2.0,
+            load_he: 1.0,
+        },
+        Tissue {
+            load_n2: 1.0,
+            load_he: 2.0,
+        },
+        Tissue {
+            load_n2: 0.5,
+            load_he: 0.5,
+        },
+        Tissue {
+            load_n2: 4.0,
+            load_he: 0.0,
+        },
+        Tissue {
+            load_n2: 0.0,
+            load_he: 4.0,
+        },
+        Tissue {
+            load_n2: 2.5,
+            load_he: 2.5,
+        },
+        Tissue {
+            load_n2: 1.5,
+            load_he: 1.5,
+        },
+        Tissue {
+            load_n2: 3.5,
+            load_he: 0.5,
+        },
+        Tissue {
+            load_n2: 0.5,
+            load_he: 3.5,
+        },
+        Tissue {
+            load_n2: 2.0,
+            load_he: 2.0,
+        },
+        Tissue {
+            load_n2: 1.0,
+            load_he: 1.0,
+        },
+        Tissue {
+            load_n2: 0.0,
+            load_he: 0.0,
+        },
+        Tissue {
+            load_n2: 5.0,
+            load_he: 0.0,
+        },
+        Tissue {
+            load_n2: 0.0,
+            load_he: 5.0,
+        },
+        Tissue {
+            load_n2: 3.0,
+            load_he: 3.0,
+        },
     ];
 
     let (max_ceiling, tissue_index) = max_ceiling(DiveParameters::default(), &tissues);
@@ -135,7 +196,10 @@ fn test_ceiling_with_custom_gradient_factors() {
 
     let tissue_index = 5;
     let result = ceiling(params, tissue, tissue_index);
-    assert!(result > 0, "Ceiling should be greater than 0 with custom gradient factors");
+    assert!(
+        result > 0,
+        "Ceiling should be greater than 0 with custom gradient factors"
+    );
 }
 
 #[test]
@@ -148,7 +212,6 @@ pub fn rounding_test() {
     let rounded = ((f1 + 2.999) / 3.0) as u32 * 3;
     assert_eq!(rounded, 12);
 }
-
 
 #[test]
 fn test_ceiling() {
@@ -203,23 +266,38 @@ fn test_known_ceiling_value() {
     println!("Reset tissues!");
     reset_tissues(&mut tissues, start_amb_pressure, temperature);
     println!("Descending to {:?}m from 1bar ambient pressure, 22.0C with 1 second time increment and {:?}min bottom time", first_target_depth, first_bottom_time);
-    simulate(&mut params, &mut tissues, 1.0, first_target_depth, temperature, 1.0, first_bottom_time * 60.0);
+    simulate(
+        &mut params,
+        &mut tissues,
+        1.0,
+        first_target_depth,
+        temperature,
+        1.0,
+        first_bottom_time * 60.0,
+    );
     let amb_pressure = first_target_depth / 10.0 + 1.0;
-    simulate(&mut params, &mut tissues, amb_pressure, second_target_depth, temperature, 1.0, second_bottom_time * 60.0);
+    simulate(
+        &mut params,
+        &mut tissues,
+        amb_pressure,
+        second_target_depth,
+        temperature,
+        1.0,
+        second_bottom_time * 60.0,
+    );
 
     let resulting_ceiling = max_ceiling(params, &tissues);
 
     println!("Max ceiling for tissues: {:?}", resulting_ceiling.0);
     assert_eq!(resulting_ceiling.0, 9);
-
 }
 
 #[cfg(feature = "std")]
 #[test]
 fn test_ceiling_against_dive_deco() {
     use dive_deco::{
-        BuehlmannConfig, BuehlmannModel, CeilingType, DecoModel, DecoRuntime, DecoStage, DecoStageType,
-        Depth, Gas, Time,
+        BuehlmannConfig, BuehlmannModel, CeilingType, DecoModel, DecoRuntime, DecoStage,
+        DecoStageType, Depth, Gas, Time,
     };
 
     use crate::{simulate::simulate, water_vapor_pressure, FHE, FN2};
@@ -245,43 +323,62 @@ fn test_ceiling_against_dive_deco() {
     println!("Reset tissues!");
     reset_tissues(&mut tissues, start_amb_pressure, temperature);
     println!("Descending to {:?}m from 1bar ambient pressure, 22.0C with 1 second time increment and {:?}min bottom time", first_target_depth, first_bottom_time);
-    simulate(&mut params, &mut tissues, 1.0, first_target_depth, temperature, 1.0, first_bottom_time * 60.0);
+    simulate(
+        &mut params,
+        &mut tissues,
+        1.0,
+        first_target_depth,
+        temperature,
+        1.0,
+        first_bottom_time * 60.0,
+    );
 
     let first_ceiling = max_ceiling(params, &tissues);
-    println!("Model ceiling for dive at {:?} for {:?}: {:?}", first_target_depth, first_bottom_time, first_ceiling.0);
+    println!(
+        "Model ceiling for dive at {:?} for {:?}: {:?}",
+        first_target_depth, first_bottom_time, first_ceiling.0
+    );
 
     let amb_pressure = first_target_depth / 10.0 + 1.0;
-    simulate(&mut params, &mut tissues, amb_pressure, second_target_depth, temperature, 1.0, second_bottom_time * 60.0);
+    simulate(
+        &mut params,
+        &mut tissues,
+        amb_pressure,
+        second_target_depth,
+        temperature,
+        1.0,
+        second_bottom_time * 60.0,
+    );
 
     let second_ceiling = max_ceiling(params, &tissues);
-    println!("Model ceiling for dive at {:?} for {:?}: {:?}", second_target_depth, second_bottom_time, second_ceiling.0);
+    println!(
+        "Model ceiling for dive at {:?} for {:?}: {:?}",
+        second_target_depth, second_bottom_time, second_ceiling.0
+    );
 
     let mut model = BuehlmannModel::default();
 
-    let nitrox_32 = Gas::new(0.21, 0.);
+    let air = Gas::new(0.21, 0.);
 
-    model.record(Depth::from_meters(20.), Time::from_minutes(20.), &nitrox_32);
+    model.record(Depth::from_meters(20.), Time::from_minutes(20.), &air);
     println!("Reference ceiling: {}m", model.ceiling());
     let first_reference_ceiling = ((model.ceiling().as_meters() + 2.999) / 3.0) as u32 * 3;
 
-    model.record(Depth::from_meters(30.), Time::from_minutes(42.), &nitrox_32);
+    model.record(Depth::from_meters(30.), Time::from_minutes(42.), &air);
     println!("Reference ceiling: {},", model.ceiling());
     let second_reference_ceiling = ((model.ceiling().as_meters() + 2.999) / 3.0) as u32 * 3;
 
     // assert_eq!(first_ceiling.0, first_reference_ceiling);
     // assert_eq!(second_ceiling.0, second_reference_ceiling);
-
 }
 
 #[cfg(feature = "std")]
 #[test]
 fn test_ceiling_generalized_dive_deco() {
-    use dive_deco::{
-        BuehlmannModel, DecoModel, Depth, Gas, Time,
-    };
-    use std::vec::Vec;
-    use std::vec;
+    use dive_deco::{BuehlmannModel, DecoModel, Depth, Gas, Time};
     use rand::Rng;
+    use std::vec;
+    use std::vec::Vec;
 
     use crate::{simulate::simulate, water_vapor_pressure, FHE, FN2};
 
@@ -294,7 +391,10 @@ fn test_ceiling_generalized_dive_deco() {
 
     fn compare_ceilings(target_depth: f32, bottom_time: f32) {
         println!("===================================");
-        println!("Testing ceiling for dive at {:?}m for {:?}min", target_depth, bottom_time);
+        println!(
+            "Testing ceiling for dive at {:?}m for {:?}min",
+            target_depth, bottom_time
+        );
         // My model implementation
         let mut tissues = [Tissue::default(); 16];
         let temperature = 20.0;
@@ -303,23 +403,35 @@ fn test_ceiling_generalized_dive_deco() {
         let mut params = DiveParameters::new(1.0, 1.0);
         println!("Reset tissues!");
         reset_tissues(&mut tissues, start_amb_pressure, temperature);
-        simulate(&mut params, &mut tissues, 1.0, target_depth, temperature, 1.0, bottom_time * 60.0);
-    
+        simulate(
+            &mut params,
+            &mut tissues,
+            1.0,
+            target_depth,
+            temperature,
+            1.0,
+            bottom_time * 60.0,
+        );
+
         let first_ceiling = max_ceiling(params, &tissues);
-        println!("Model ceiling for dive at {:?} for {:?}: {:?}", target_depth, bottom_time, first_ceiling.0);
-
-
+        println!(
+            "Model ceiling for dive at {:?} for {:?}: {:?}",
+            target_depth, bottom_time, first_ceiling.0
+        );
 
         // Reference model implementation
         let mut model = BuehlmannModel::default();
-        let nitrox_32 = Gas::new(0.21, 0.);
-        model.record(Depth::from_meters(target_depth), Time::from_minutes(bottom_time), &nitrox_32);
+        let air = Gas::new(0.21, 0.);
+        model.record(
+            Depth::from_meters(target_depth),
+            Time::from_minutes(bottom_time),
+            &air,
+        );
         println!("Reference ceiling: {}m", model.ceiling());
         let reference_ceiling = ((model.ceiling().as_meters() + 2.999) / 3.0) as u32 * 3;
 
         assert_eq!(first_ceiling.0, reference_ceiling);
     }
-
 
     struct TestCeiling {
         target_depth: f32,
@@ -330,7 +442,10 @@ fn test_ceiling_generalized_dive_deco() {
     for _i in 0..10 {
         let target_depth = rand::rng().random_range(15.0..50.0);
         let bottom_time = rand::rng().random_range(5.0..100.0);
-        test_data.push(TestCeiling { target_depth, bottom_time });
+        test_data.push(TestCeiling {
+            target_depth,
+            bottom_time,
+        });
     }
 
     for test in test_data.iter() {
@@ -348,7 +463,7 @@ fn test_ceiling_multiple_tissues_from_csv() {
     let mut rdr = Reader::from_path("depth.csv").unwrap();
     let mut tissues = [Tissue::default(); 16];
     let mut depth: Vec<f32> = Vec::new();
-    for result in rdr.records(){
+    for result in rdr.records() {
         let record = result.unwrap();
         let depth_record: f32 = record[0].parse().unwrap();
         depth.push(depth_record);
@@ -366,7 +481,13 @@ fn test_ceiling_multiple_tissues_from_csv() {
         }
         amb_pressure = -depth[i as usize] / 10.0 + 1.0;
         i += 1;
-        let result = run_no_deco_loop(&mut DiveParameters::default(), &mut tissues, amb_pressure, temperature, 1.0/60.0);
+        let result = run_no_deco_loop(
+            &mut DiveParameters::default(),
+            &mut tissues,
+            amb_pressure,
+            temperature,
+            1.0 / 60.0,
+        );
         match result {
             Ok(_) => (),
             Err(e) => {
@@ -387,12 +508,10 @@ fn test_ceiling_multiple_tissues_from_csv() {
 #[cfg(feature = "std")]
 #[test]
 fn test_ceiling_generalized_dive_deco_using_minutes_time_increment() {
-    use dive_deco::{
-        BuehlmannModel, DecoModel, Depth, Gas, Time,
-    };
-    use std::vec::Vec;
-    use std::vec;
+    use dive_deco::{BuehlmannModel, DecoModel, Depth, Gas, Time};
     use rand::Rng;
+    use std::vec;
+    use std::vec::Vec;
 
     use crate::{simulate::simulate, water_vapor_pressure, FHE, FN2};
 
@@ -405,7 +524,10 @@ fn test_ceiling_generalized_dive_deco_using_minutes_time_increment() {
 
     fn compare_ceilings(target_depth: f32, bottom_time: f32) {
         println!("===================================");
-        println!("Testing ceiling for dive at {:?}m for {:?}min", target_depth, bottom_time);
+        println!(
+            "Testing ceiling for dive at {:?}m for {:?}min",
+            target_depth, bottom_time
+        );
         // My model implementation
         let mut tissues = [Tissue::default(); 16];
         let temperature = 20.0;
@@ -414,23 +536,35 @@ fn test_ceiling_generalized_dive_deco_using_minutes_time_increment() {
         let mut params = DiveParameters::new(1.0, 1.0);
         println!("Reset tissues!");
         reset_tissues(&mut tissues, start_amb_pressure, temperature);
-        simulate(&mut params, &mut tissues, start_amb_pressure, target_depth, temperature, 60.0, bottom_time * 60.0);
-    
+        simulate(
+            &mut params,
+            &mut tissues,
+            start_amb_pressure,
+            target_depth,
+            temperature,
+            60.0,
+            bottom_time * 60.0,
+        );
+
         let first_ceiling = max_ceiling(params, &tissues);
-        println!("Model ceiling for dive at {:?} for {:?}: {:?}", target_depth, bottom_time, first_ceiling.0);
-
-
+        println!(
+            "Model ceiling for dive at {:?} for {:?}: {:?}",
+            target_depth, bottom_time, first_ceiling.0
+        );
 
         // Reference model implementation
         let mut model = BuehlmannModel::default();
-        let nitrox_32 = Gas::new(0.21, 0.);
-        model.record(Depth::from_meters(target_depth), Time::from_minutes(bottom_time), &nitrox_32);
+        let air = Gas::new(0.21, 0.);
+        model.record(
+            Depth::from_meters(target_depth),
+            Time::from_minutes(bottom_time),
+            &air,
+        );
         println!("Reference ceiling: {}m", model.ceiling());
         let reference_ceiling = ((model.ceiling().as_meters() + 2.999) / 3.0) as u32 * 3;
 
         assert_eq!(first_ceiling.0, reference_ceiling);
     }
-
 
     struct TestCeiling {
         target_depth: f32,
@@ -441,7 +575,10 @@ fn test_ceiling_generalized_dive_deco_using_minutes_time_increment() {
     for _i in 0..10 {
         let target_depth = rand::rng().random_range(15.0..50.0);
         let bottom_time = rand::rng().random_range(5.0..100.0);
-        test_data.push(TestCeiling { target_depth, bottom_time });
+        test_data.push(TestCeiling {
+            target_depth,
+            bottom_time,
+        });
     }
 
     for test in test_data.iter() {
