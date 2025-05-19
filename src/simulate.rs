@@ -42,73 +42,99 @@ impl SimulationOutputs {
 }
 
 #[inline(never)]
-pub fn simulate(params: &mut DiveParameters, tissues: &mut [Tissue; 16], starting_ambient_pressure: f32, target_depth: f32, temperature: f32, interval_in_seconds: f32, bottom_time_seconds: f32) -> SimulationOutputs {
+pub fn simulate(
+    params: &mut DiveParameters,
+    tissues: &mut [Tissue; 16],
+    starting_ambient_pressure: f32,
+    target_depth: f32,
+    temperature: f32,
+    interval_in_seconds: f32,
+    bottom_time_seconds: f32,
+) -> SimulationOutputs {
     let mut outputs = SimulationOutputs::new();
     let mut amb_pressure = starting_ambient_pressure;
     let mut depth = 0.0;
     let mut dive_time = 0.0;
     let mut descending = true;
     let mut bottom = false;
-    // let mut descent_time = 0.0;
+
+    // Define a fixed internal time step (e.g., 1 second) for consistent simulation
+    let internal_step = 1.0_f32;
+
+    // Accumulator for output recording
+    let mut output_accumulator = 0.0;
+
     loop {
         if descending {
-            depth += params.descent_speed * interval_in_seconds;
+            // Calculate remaining time to reach target depth at descent speed
+            let remaining_depth = target_depth - depth;
+            let time_to_target = remaining_depth / params.descent_speed;
+
+            // Determine current step duration (do not overshoot target depth)
+            let step = internal_step.min(time_to_target);
+
+            // Update depth and ambient pressure
+            depth += params.descent_speed * step;
+            amb_pressure = depth / 10.0 + 1.0;
+
+            // Update tissues for this step (convert seconds to minutes)
+            for i in 0..16 {
+                tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, step / 60.0);
+            }
+
+            dive_time += step;
+            output_accumulator += step;
+
+            // Record outputs at each interval_in_seconds
+            if output_accumulator >= interval_in_seconds {
+                #[cfg(feature = "serde")]
+                {
+                    outputs.depths.push(depth);
+                    outputs.pressures.push(amb_pressure);
+                    outputs.tissues_per_interval.push(*tissues);
+                }
+                output_accumulator -= interval_in_seconds;
+            }
+
             if depth >= target_depth {
-                #[cfg(feature = "std")]
-                println!("Reached target depth after {}s", dive_time);
                 descending = false;
                 bottom = true;
                 continue;
             }
-            amb_pressure = depth / 10.0 + 1.0;
-            dive_time += interval_in_seconds;
-            let mod_dive_time = dive_time % 60.0;
-            // descent_time += interval_in_seconds;
-            #[cfg(feature = "serde")]
-            if mod_dive_time == 0.0 {
-                outputs.depths.push(depth);
-                outputs.pressures.push(amb_pressure);
-            }
-            #[cfg(feature = "serde")]
-            let mut instant_tissues = [Tissue::default(); 16];
-            for i in 0..16 {
-                tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, interval_in_seconds/60.0);
-                #[cfg(feature = "serde")]
-                if mod_dive_time == 0.0 {
-                    instant_tissues[i] = tissues[i];
-                }
-            }
-            #[cfg(feature = "serde")]
-            if mod_dive_time == 0.0 {
-                outputs.tissues_per_interval.push(instant_tissues);
-            }
-        }
-        if bottom {
-            if dive_time > bottom_time_seconds {
-                #[cfg(feature = "std")]
-                println!("Reached ascent phase after {}s", dive_time);
+        } else if bottom {
+            // Bottom phase: stay at target depth for bottom_time_seconds
+            let remaining_bottom_time = bottom_time_seconds - (dive_time - (target_depth / params.descent_speed));
+            if remaining_bottom_time <= 0.0 {
                 break;
             }
-            dive_time += interval_in_seconds;
-            let mod_dive_time = dive_time % 60.0;
-            #[cfg(feature = "serde")]
-            if mod_dive_time == 0.0 {
-                outputs.depths.push(depth);
-                outputs.pressures.push(amb_pressure);
-            }
-            #[cfg(feature = "serde")]
-            let mut instant_tissues = [Tissue::default(); 16];
+
+            let step = internal_step.min(remaining_bottom_time);
+
+            // Depth and pressure remain constant at target depth
+            depth = target_depth;
+            amb_pressure = depth / 10.0 + 1.0;
+
+            // Update tissues for this step
             for i in 0..16 {
-                tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, 1.0/60.0);
+                tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, step / 60.0);
+            }
+
+            dive_time += step;
+            output_accumulator += step;
+
+            // Record outputs at each interval_in_seconds
+            if output_accumulator >= interval_in_seconds {
                 #[cfg(feature = "serde")]
-                if mod_dive_time == 0.0 {
-                    instant_tissues[i] = tissues[i];
+                {
+                    outputs.depths.push(depth);
+                    outputs.pressures.push(amb_pressure);
+                    outputs.tissues_per_interval.push(*tissues);
                 }
+                output_accumulator -= interval_in_seconds;
             }
-            #[cfg(feature = "serde")]
-            if mod_dive_time == 0.0 {
-                outputs.tissues_per_interval.push(instant_tissues);
-            }
+        } else {
+            // Ascent or other phases can be handled here if needed
+            break;
         }
     }
 

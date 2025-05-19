@@ -160,14 +160,14 @@ fn test_reference_dive_deco() {
 
     let mut results = Vec::new();
     for depth in depths.iter() {
-        results.push(compare_ndl(*depth, 0.0));
+        results.push((depth, compare_ndl(*depth, 0.0)));
     }
 
     for result in results.iter() {
-        println!("NDL: {}min - Reference NDL: {}min", result.0, result.1);
+        println!("DEPTH: {} - NDL: {}min - Reference NDL: {}min", result.0, result.1.0, result.1.1);
     }
 
     for result in results.iter() {
-        assert_eq!(result.0, result.1);
+        assert_eq!(result.1.0, result.1.1);
     }
 }
