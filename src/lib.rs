@@ -89,7 +89,8 @@ pub fn water_vapor_pressure(_temperature: f32) -> f32 {
     // T -> temperature in Celsius
     // A, B, C -> Antoine equation constants
     // A = 8.07131, B = 1730.63, C = 233.426
-    0.0555
+    // 0.0555
+    0.0627
 }
 
 #[test]
