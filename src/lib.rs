@@ -35,8 +35,8 @@ pub struct DiveParameters {
 impl DiveParameters {
     pub fn new(gf_high: f32, gf_low: f32) -> Self {
         DiveParameters {
-            descent_speed: 0.33,
-            ascent_speed: 0.17,
+            descent_speed: 0.333333333,
+            ascent_speed: 0.1666667,
             safety_stop_ascent_speed: 0.083,
             safety_stop_duration: 3.0,
             safety_stop_depth: 5.0,

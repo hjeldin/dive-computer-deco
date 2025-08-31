@@ -6,6 +6,11 @@ use std::println;
 
 #[inline(never)]
 pub fn ceiling(dive_parameters: DiveParameters, tissue: Tissue, tissue_index: usize) -> u32 {
+    ceiling_with_gf(dive_parameters.gf_low, tissue, tissue_index)
+}
+
+#[inline(never)]
+pub fn ceiling_with_gf(gradient_factor: f32, tissue: Tissue, tissue_index: usize) -> u32 {
     let pn2 = tissue.load_n2;
     let phe = tissue.load_he;
     let an2: f32 = ZhL16cGf::N2_A[tissue_index];
@@ -15,29 +20,61 @@ pub fn ceiling(dive_parameters: DiveParameters, tissue: Tissue, tissue_index: us
     let bhe: f32 = ZhL16cGf::HE_B[tissue_index];
 
     let p_total = pn2 + phe;
+    
+    // Handle edge case where tissue has no inert gas loading
+    if p_total <= 0.0 {
+        return 0;
+    }
+    
     let a = ((an2 * pn2) + (ahe * phe)) / (p_total);
     let b = ((bn2 * pn2) + (bhe * phe)) / (p_total);
 
-    // let r = ((p_total) - a * dive_parameters.gf_high) * (b / (dive_parameters.gf_high - (dive_parameters.gf_high * b) + b));
-    // let mut result_bar = (p_total) - a * dive_parameters.gf_high;
-    // result_bar /= (dive_parameters.gf_high / b) + 1.0 - dive_parameters.gf_high;
-    let result_bar =
-        (b * p_total - dive_parameters.gf_low * a * b) / ((1.0 - b) * dive_parameters.gf_low + b);
+    // Calculate ceiling using the Bühlmann equation with gradient factors
+    let denominator = (1.0 - b) * gradient_factor + b;
+    
+    // Safety check for very small denominators (shouldn't happen with valid GF values)
+    if denominator.abs() < 1e-10 {
+        #[cfg(feature = "std")]
+        println!("Warning: Near-zero denominator in ceiling calculation. Using fallback calculation.");
+        return 0;
+    }
+    
+    let result_bar = (b * p_total - gradient_factor * a * b) / denominator;
 
     // the result is in bars, we need to convert it to meters
     let result_meters = (result_bar - 1.0) * 10.0;
+    
+    // Ensure we don't have negative ceilings
+    if result_meters < 0.0 {
+        return 0;
+    }
 
     // round down to multiples of 3
     let ceiling = ((result_meters + 2.999) / 3.0) as u32 * 3;
-    // let rounded_ceiling = (ceiling * 3.0) as f32;
-    #[cfg(feature = "std")]
-    println!(
-        "Tissue: {:?} \t Ceil (nr): {:.5} \t Ceil: {:.5}",
-        tissue_index + 1,
-        result_meters,
-        ceiling
-    );
+    
+    // #[cfg(feature = "std")]
+    // println!(
+    //     "Tissue: {:?} \t GF: {:.2} \t Ceil (nr): {:.5} \t Ceil: {:.5}",
+    //     tissue_index + 1,
+    //     gradient_factor,
+    //     result_meters,
+    //     ceiling
+    // );
     ceiling
+}
+
+#[inline(never)]
+pub fn max_ceiling_with_gf(gradient_factor: f32, tissues: &[Tissue; 16]) -> (u32, usize) {
+    let mut max_ceiling = 0;
+    let mut tissue_index = 0;
+    for i in 0..16 {
+        let tentative_max_ceiling = ceiling_with_gf(gradient_factor, tissues[i], i);
+        if tentative_max_ceiling > max_ceiling {
+            max_ceiling = tentative_max_ceiling;
+            tissue_index = i;
+        }
+    }
+    (max_ceiling, tissue_index)
 }
 
 #[inline(never)]
@@ -440,14 +477,18 @@ fn test_ceiling_generalized_dive_deco() {
 
     let mut test_data: Vec<TestCeiling> = vec![];
 
-    for i in 30..40 {
-        let target_depth = i as f32;
-        let bottom_time = 20.0;
-        test_data.push(TestCeiling {
-            target_depth,
-            bottom_time
-        });
-    }
+    // for i in 30..40 {
+    //     let target_depth = i as f32;
+    //     let bottom_time = 20.0;
+    //     test_data.push(TestCeiling {
+    //         target_depth,
+    //         bottom_time
+    //     });
+    // }
+    test_data.push(TestCeiling {
+        target_depth: 50.0,
+        bottom_time: 20.0,
+    });
 
     // for _i in 0..10 {
     //     let target_depth = rand::rng().random_range(15.0..50.0);

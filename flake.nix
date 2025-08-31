@@ -62,6 +62,7 @@
 
             gdb
             gef
+            rustup
 
             # Rust Embedded
             (rust-bin.stable.latest.default.override {

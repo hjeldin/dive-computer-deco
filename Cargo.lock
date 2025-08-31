@@ -232,16 +232,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dive-deco"
-version = "6.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26e1aee0cdf4e2b1ab19beb9fb469eaaee5b6faaa2ca7e78c18874297d564c60"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "dive-deco-x86"
+name = "dive-computer-deco"
 version = "0.1.0"
 dependencies = [
  "criterion",
@@ -252,6 +243,15 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dive-deco"
+version = "6.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26e1aee0cdf4e2b1ab19beb9fb469eaaee5b6faaa2ca7e78c18874297d564c60"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

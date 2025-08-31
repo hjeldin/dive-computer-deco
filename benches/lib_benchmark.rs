@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use dive_deco_x86::{
+use dive_computer_deco::{
     ceiling::{ceiling, max_ceiling},
     simulate::simulate,
     tissue::calculate_tissue,

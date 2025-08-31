@@ -14,22 +14,47 @@ pub fn ndl(
     // while ceiling is 0 keep looping
     let mut bottom_time = 0.0;
     let mut max_ceiling: u32 = 0;
+    const MAX_ITERATIONS: u32 = 10000; // Prevent infinite loops with extreme GF values
+    let mut iterations = 0;
+
     loop {
+        max_ceiling = 0; // Reset max_ceiling at the start of each iteration
         for i in 0..16 {
             tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, 1.0);
             max_ceiling = u32::max(max_ceiling, ceiling(dive_parameters, tissues[i], i));
         }
 
         #[cfg(feature = "std")]
-        println!(
-            "Bottom Time: {:?} N2 Load: [1] {:.5} \t [16] {:.5} \t Amb. press: {:.5}",
-            bottom_time, tissues[0].load_n2, tissues[15].load_n2, amb_pressure
-        );
+        if iterations % 1000 == 0 && iterations > 0 {
+            println!(
+                "NDL calculation in progress... Iteration: {}, Bottom Time: {:?} min, Max Ceiling: {}m",
+                iterations, bottom_time, max_ceiling
+            );
+        }
+
+        #[cfg(feature = "std")]
+        if iterations < 100 || iterations % 100 == 0 {
+            println!(
+                "Bottom Time: {:?} N2 Load: [1] {:.5} \t [16] {:.5} \t Amb. press: {:.5}",
+                bottom_time, tissues[0].load_n2, tissues[15].load_n2, amb_pressure
+            );
+        }
 
         if max_ceiling != 0 {
             return bottom_time;
         }
+
         bottom_time += 1.0;
+        iterations += 1;
+
+        // Safety check to prevent infinite loops with extreme gradient factors
+        if iterations >= MAX_ITERATIONS {
+            #[cfg(feature = "std")]
+            println!("⚠️  Warning: NDL calculation reached maximum iterations ({}). This may indicate extreme gradient factor values (GF = 1.0) that prevent decompression requirements.", MAX_ITERATIONS);
+            #[cfg(feature = "std")]
+            println!("    Returning NDL of {} minutes as safety limit.", bottom_time);
+            return bottom_time; // Return current bottom time as NDL
+        }
     }
 }
 
