@@ -67,15 +67,31 @@ pub fn simulate_with_ascent(
     bottom_time_seconds: f32,
     include_ascent: bool,
 ) -> SimulationOutputs {
+    simulate_with_ascent_from_depth(params, tissues, starting_ambient_pressure, 0.0, target_depth, temperature, interval_in_seconds, bottom_time_seconds, include_ascent)
+}
+
+#[inline(never)]
+pub fn simulate_with_ascent_from_depth(
+    params: &mut DiveParameters,
+    tissues: &mut [Tissue; 16],
+    starting_ambient_pressure: f32,
+    starting_depth: f32,
+    target_depth: f32,
+    temperature: f32,
+    interval_in_seconds: f32,
+    bottom_time_seconds: f32,
+    include_ascent: bool,
+) -> SimulationOutputs {
     use crate::ceiling::max_ceiling_with_gf;
     
     let mut outputs = SimulationOutputs::new();
-    let mut amb_pressure = starting_ambient_pressure;
-    let mut depth = 0.0;
+    let mut depth = starting_depth;
+    let mut amb_pressure = depth / 10.0 + 1.0; // Convert depth to absolute pressure
     let mut dive_time = 0.0;
-    let mut descending = true;
-    let mut bottom = false;
+    let mut descending = if starting_depth < target_depth { true } else { false };
+    let mut bottom = if starting_depth == target_depth { true } else { false };
     let mut ascending = false;
+    let mut transitioning = if starting_depth > target_depth { true } else { false }; // New state for going from deeper to shallower
     let mut at_deco_stop = false;
     let mut first_stop_depth: Option<f32> = None;
     let mut current_deco_depth = 0.0;
@@ -130,6 +146,34 @@ pub fn simulate_with_ascent(
                 #[cfg(feature = "std")]
                 println!("Reached target depth: {}m after {} seconds", target_depth, dive_time);
                 descending = false;
+                bottom = true;
+                continue;
+            }
+        } else if transitioning {
+            // TRANSITION PHASE - going from deeper to shallower depth
+            let remaining_depth = depth - target_depth;
+            let time_to_target = remaining_depth / params.ascent_speed;
+            let step = internal_step.min(time_to_target);
+
+            depth -= params.ascent_speed * step;
+            amb_pressure = depth / 10.0 + 1.0;
+
+            for i in 0..16 {
+                tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, step / 60.0);
+            }
+
+            dive_time += step;
+            output_accumulator += step;
+
+            if output_accumulator >= interval_in_seconds {
+                record_output(&mut outputs, depth, amb_pressure, tissues);
+                output_accumulator -= interval_in_seconds;
+            }
+
+            if depth <= target_depth {
+                #[cfg(feature = "std")]
+                println!("Reached target depth: {}m after {} seconds (transitioning)", target_depth, dive_time);
+                transitioning = false;
                 bottom = true;
                 continue;
             }

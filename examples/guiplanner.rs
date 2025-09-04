@@ -2,9 +2,10 @@ use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use dive_computer_deco::{
     DiveParameters,
-    tissue::Tissue,
-    simulate::{simulate_with_ascent, SimulationOutputs},
+    tissue::{Tissue, calculate_tissue},
+    simulate::SimulationOutputs,
     ceiling::max_ceiling_with_gf,
+    m_value::calculate_m_values,
     water_vapor_pressure, FN2, FHE,
 };
 
@@ -21,6 +22,12 @@ impl DiveStep {
             duration: 20.0,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PlotTab {
+    DiveProfile,
+    TissuePressure,
 }
 
 struct DivePlannerApp {
@@ -40,6 +47,8 @@ struct DivePlannerApp {
     show_ceiling: bool,
     show_depth: bool,
     show_pressure: bool,
+    active_tab: PlotTab,
+    tissue_visibility: [bool; 16], // Visibility toggle for each tissue compartment
 }
 
 impl Default for DivePlannerApp {
@@ -54,6 +63,8 @@ impl Default for DivePlannerApp {
             show_ceiling: true,
             show_depth: true,
             show_pressure: false,
+            active_tab: PlotTab::DiveProfile,
+            tissue_visibility: [true; 16], // All tissues visible by default
         }
     }
 }
@@ -61,8 +72,12 @@ impl Default for DivePlannerApp {
 impl eframe::App for DivePlannerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Use regular egui layout with improved styling
-            ui.horizontal(|ui| {
+            // Use regular egui layout with improved styling - take full height
+            let available_rect = ui.available_rect_before_wrap();
+            ui.allocate_ui_with_layout(
+                available_rect.size(),
+                egui::Layout::left_to_right(egui::Align::TOP),
+                |ui| {
                 // Left column - Control panels with visual blocks
                 ui.vertical(|ui| {
                     ui.set_min_width(380.0);
@@ -98,12 +113,12 @@ impl eframe::App for DivePlannerApp {
                 // Right column - Results with styling
                 ui.vertical(|ui| {
                     ui.set_min_width(600.0);
-                    ui.group(|ui| {
-                        ui.spacing_mut().item_spacing.y = 8.0;
-                        self.results_panel(ui);
-                    });
+                    // Remove the group wrapper to allow full height usage
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    self.results_panel(ui);
                 });
-            });
+            }
+        );
         });
     }
 }
@@ -282,7 +297,7 @@ impl DivePlannerApp {
             });
             
             egui::ScrollArea::vertical()
-                .max_height(200.0)
+                .max_height(150.0) // Reduced from 200.0 to leave more space for plots
                 .show(ui, |ui| {
                     ui.add(egui::TextEdit::multiline(&mut self.simulation_text.as_str())
                         .desired_width(f32::INFINITY)
@@ -291,22 +306,35 @@ impl DivePlannerApp {
         });
         
         ui.separator();
+        ui.add_space(8.0);
         
-        // Main dive profile plot
-        self.dive_profile_plot(ui);
+        // Tabbed plots
+        egui::TopBottomPanel::top("plot_tabs").show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.active_tab, PlotTab::DiveProfile, "🌊 Dive Profile");
+                ui.selectable_value(&mut self.active_tab, PlotTab::TissuePressure, "🧬 Tissue Pressure");
+            });
+        });
         
-        ui.separator();
+        ui.add_space(8.0);
         
-        // Second plot (placeholder for future enhancements)
-        self.secondary_plot(ui);
+        // Show the selected tab content
+        match self.active_tab {
+            PlotTab::DiveProfile => self.dive_profile_plot(ui),
+            PlotTab::TissuePressure => self.secondary_plot(ui),
+        }
     }
     
     fn dive_profile_plot(&mut self, ui: &mut egui::Ui) {
         if let Some(ref results) = self.simulation_results {
             ui.label("Dive Profile");
             
+            // Calculate available height for the plot
+            let available_height = ui.available_height() - 40.0; // Leave some margin
+            let plot_height = available_height.max(300.0); // Minimum height of 300
+            
             let plot = Plot::new("dive_profile")
-                .height(300.0)
+                .height(plot_height)
                 .legend(egui_plot::Legend::default())
                 .y_axis_label("Depth (m)")
                 .x_axis_label("Time (minutes)")
@@ -370,29 +398,154 @@ impl DivePlannerApp {
     }
     
     fn secondary_plot(&mut self, ui: &mut egui::Ui) {
-        ui.label("Future Enhancement Plot");
+        ui.horizontal(|ui| {
+            ui.label("Tissue Pressure vs Depth");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Show All").clicked() {
+                    self.tissue_visibility = [true; 16];
+                }
+                if ui.button("Hide All").clicked() {
+                    self.tissue_visibility = [false; 16];
+                }
+            });
+        });
+        
+        // Tissue visibility controls
+        ui.collapsing("🧬 Tissue Visibility", |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().item_spacing.y = 4.0;
+            
+            // Create a grid for tissue toggles (4 columns)
+            egui::Grid::new("tissue_visibility_grid")
+                .num_columns(4)
+                .spacing([20.0, 4.0])
+                .show(ui, |ui| {
+                    for i in 0..16 {
+                        ui.checkbox(&mut self.tissue_visibility[i], format!("T{}", i + 1));
+                        if (i + 1) % 4 == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+        });
+        
+        ui.add_space(8.0);
+        
+        // Calculate available height for the plot
+        let available_height = ui.available_height() - 40.0; // Leave some margin
+        let plot_height = available_height.max(300.0); // Minimum height of 300
         
         let plot = Plot::new("secondary_plot")
-            .height(200.0)
+            .height(plot_height)
             .legend(egui_plot::Legend::default())
-            .y_axis_label("Value")
-            .x_axis_label("Time");
+            .y_axis_label("Absolute Tissue Pressure (bar)")
+            .x_axis_label("Depth (m)")
+            .include_y(1.0);
         
         plot.show(ui, |plot_ui| {
-            // Placeholder for future enhancements
-            let placeholder_points: PlotPoints = vec![[0.0, 0.0], [1.0, 0.0]].into();
-            plot_ui.line(
-                Line::new("Placeholder", placeholder_points)
-                    .color(egui::Color32::GRAY)
-            );
-            
-            // Placeholder text for future enhancement
-            // plot_ui.text(
-            //     egui_plot::Text::new([0.5, 0.0].into(), "Future enhancements here")
-            // );
+            if let Some(ref results) = self.simulation_results {
+                if !results.depths.is_empty() && !results.tissues_per_interval.is_empty() {
+                    // Generate colors for each tissue compartment
+                    let colors = [
+                        egui::Color32::from_rgb(255, 100, 100), // Red
+                        egui::Color32::from_rgb(255, 150, 100), // Orange-red
+                        egui::Color32::from_rgb(255, 200, 100), // Orange
+                        egui::Color32::from_rgb(255, 255, 100), // Yellow
+                        egui::Color32::from_rgb(200, 255, 100), // Yellow-green
+                        egui::Color32::from_rgb(150, 255, 100), // Light green
+                        egui::Color32::from_rgb(100, 255, 100), // Green
+                        egui::Color32::from_rgb(100, 255, 150), // Green-cyan
+                        egui::Color32::from_rgb(100, 255, 200), // Cyan-green
+                        egui::Color32::from_rgb(100, 255, 255), // Cyan
+                        egui::Color32::from_rgb(100, 200, 255), // Light blue
+                        egui::Color32::from_rgb(100, 150, 255), // Blue
+                        egui::Color32::from_rgb(100, 100, 255), // Dark blue
+                        egui::Color32::from_rgb(150, 100, 255), // Blue-purple
+                        egui::Color32::from_rgb(200, 100, 255), // Purple
+                        egui::Color32::from_rgb(255, 100, 255), // Magenta
+                    ];
+
+                    // Plot each tissue compartment
+                    for tissue_idx in 0..16 {
+                        if !self.tissue_visibility[tissue_idx] {
+                            continue; // Skip if tissue is not visible
+                        }
+                        
+                        let tissue_points: PlotPoints = results.tissues_per_interval
+                            .iter()
+                            .enumerate()
+                            .map(|(i, tissues)| {
+                                let depth = results.depths.get(i).unwrap_or(&0.0);
+                                let tissue_pressure = tissues[tissue_idx].load_n2;
+                                [*depth as f64, tissue_pressure as f64]
+                            })
+                            .collect();
+                        
+                        plot_ui.line(
+                            Line::new(format!("Tissue {}", tissue_idx + 1), tissue_points)
+                                .color(colors[tissue_idx])
+                                .width(1.5)
+                        );
+                    }
+
+                    // Plot M-values for each tissue compartment
+                    for tissue_idx in 0..16 {
+                        if !self.tissue_visibility[tissue_idx] {
+                            continue; // Skip if tissue is not visible
+                        }
+                        
+                        let m_value_points: PlotPoints = results.depths
+                            .iter()
+                            .map(|&depth| {
+                                let ambient_pressure = self.surface_pressure + (depth / 10.0); // Convert depth to pressure
+                                let m_value = calculate_m_values(ambient_pressure, tissue_idx);
+                                [depth as f64, m_value as f64]
+                            })
+                            .collect();
+                        
+                        plot_ui.line(
+                            Line::new(format!("M-Value {}", tissue_idx + 1), m_value_points)
+                                .color(colors[tissue_idx])
+                                .width(1.0)
+                                .style(egui_plot::LineStyle::Dashed { length: 3.0 })
+                        );
+                    }
+                }
+            } else {
+                // Show placeholder when no simulation results
+                let placeholder_points: PlotPoints = vec![[0.0, 1.0], [30.0, 1.0]].into();
+                plot_ui.line(
+                    Line::new("No data - run simulation", placeholder_points)
+                        .color(egui::Color32::GRAY)
+                );
+            }
         });
     }
     
+    fn get_responsible_tissues(&self, tissues: &[Tissue; 16]) -> Vec<(usize, u32, f32)> {
+        let mut responsible_tissues = Vec::new();
+        
+        for i in 0..16 {
+            let tissue_ceiling = dive_computer_deco::ceiling::ceiling_with_gf(
+                self.gf_high, 
+                tissues[i], 
+                i, 
+                true
+            );
+            
+            if tissue_ceiling > 0 {
+                // Calculate tissue loading percentage
+                let m_value = dive_computer_deco::m_value::calculate_m_values(self.surface_pressure, i);
+                let loading_percent = (tissues[i].load_n2 / m_value) * 100.0;
+                responsible_tissues.push((i, tissue_ceiling, loading_percent));
+            }
+        }
+        
+        // Sort by ceiling depth (deepest first)
+        responsible_tissues.sort_by(|a, b| b.1.cmp(&a.1));
+        responsible_tissues
+    }
+
     fn run_simulation(&mut self) {
         if self.dive_steps.is_empty() {
             self.simulation_text = "Error: No dive steps defined".to_string();
@@ -419,55 +572,64 @@ impl DivePlannerApp {
         dive_text.push_str(&format!("Surface Pressure: {:.2} bar\n\n", self.surface_pressure));
         
         let mut total_runtime = 0.0;
+
+        // Create a continuous simulation for all dive steps
+        all_results = self.simulate_dive_steps(&mut dive_params, &mut tissues, temperature);
         
         for (step_num, step) in self.dive_steps.iter().enumerate() {
             dive_text.push_str(&format!("Step {}: {}m for {:.1} minutes\n", 
                 step_num + 1, step.depth, step.duration));
-            
-            // Simulate this step
-            let step_results = simulate_with_ascent(
-                &mut dive_params,
-                &mut tissues,
-                self.surface_pressure,
-                step.depth,
-                temperature,
-                10.0, // 10-second intervals
-                step.duration * 60.0, // Convert to seconds
-                step_num == self.dive_steps.len() - 1 // Only include ascent on last step
-            );
-            
-            // Accumulate results
-            for depth in step_results.depths.iter() {
-                all_results.depths.push(*depth);
-            }
-            for pressure in step_results.pressures.iter() {
-                all_results.pressures.push(*pressure);
-            }
-            for tissue_set in step_results.tissues_per_interval.iter() {
-                all_results.tissues_per_interval.push(*tissue_set);
-            }
-            
             total_runtime += step.duration;
         }
         
         // Calculate final ceiling and decompression status
         let (final_ceiling, controlling_tissue) = max_ceiling_with_gf(self.gf_high, &tissues);
         
+        // Get all tissues requiring decompression
+        let responsible_tissues = self.get_responsible_tissues(&tissues);
+        
+        // Calculate total dive time from simulation results
+        let total_dive_time = if !all_results.depths.is_empty() {
+            (all_results.depths.len() as f32 * 10.0) / 60.0 // Convert from 10-second intervals to minutes
+        } else {
+            total_runtime // Fallback to bottom time only
+        };
+        
+        // Calculate decompression stops from actual simulation data
+        let deco_stops = self.calculate_deco_stops_from_results(&all_results);
+        let total_deco_time: f32 = deco_stops.iter().map(|(_, time)| time).sum();
+        let ascent_time = total_dive_time - total_runtime; // Total time minus bottom time
+        
         dive_text.push_str(&format!("\n=== SIMULATION RESULTS ===\n"));
         dive_text.push_str(&format!("Total Bottom Time: {:.1} minutes\n", total_runtime));
+        dive_text.push_str(&format!("Total Dive Time: {:.1} minutes\n", total_dive_time));
+        dive_text.push_str(&format!("Ascent Time: {:.1} minutes\n", ascent_time));
+        dive_text.push_str(&format!("Total Decompression Time: {:.1} minutes\n", total_deco_time));
         dive_text.push_str(&format!("Final Ceiling: {}m\n", final_ceiling));
-        dive_text.push_str(&format!("Controlling Tissue: {}\n", controlling_tissue));
+        dive_text.push_str(&format!("Controlling Tissue: {}\n", controlling_tissue + 1));
         
-        if final_ceiling > 0 {
+        if final_ceiling > 0 || !deco_stops.is_empty() {
             dive_text.push_str(&format!("\n⚠️  DECOMPRESSION REQUIRED ⚠️\n"));
             dive_text.push_str(&format!("Mandatory decompression ceiling: {}m\n", final_ceiling));
             
-            // Calculate approximate decompression stops
-            dive_text.push_str(&format!("\nApproximate Decompression Schedule:\n"));
-            let mut current_depth = ((final_ceiling as f32 + 2.0) / 3.0).ceil() * 3.0;
-            while current_depth >= 3.0 {
-                dive_text.push_str(&format!("  {}m: variable time\n", current_depth as u32));
-                current_depth -= 3.0;
+            // Show responsible tissues
+            if !responsible_tissues.is_empty() {
+                dive_text.push_str(&format!("\nResponsible Tissue(s):\n"));
+                for (tissue_idx, ceiling, loading_pct) in &responsible_tissues {
+                    dive_text.push_str(&format!("  Tissue {}: {}m ceiling ({:.1}% loaded)\n", 
+                        tissue_idx + 1, ceiling, loading_pct));
+                }
+            }
+            
+            if !deco_stops.is_empty() {
+                dive_text.push_str(&format!("\nDecompression Schedule:\n"));
+                for (depth, time) in deco_stops {
+                    dive_text.push_str(&format!("  {}m: {:.1} minutes\n", depth as u32, time));
+                }
+                dive_text.push_str(&format!("\nTotal decompression time: {:.1} minutes\n", total_deco_time));
+            } else {
+                dive_text.push_str(&format!("\nNo decompression stops detected in simulation\n"));
+                dive_text.push_str(&format!("(Final ceiling suggests decompression may be required)\n"));
             }
         } else {
             dive_text.push_str(&format!("\n✅ NO DECOMPRESSION REQUIRED\n"));
@@ -484,6 +646,158 @@ impl DivePlannerApp {
         
         self.simulation_results = Some(all_results);
         self.simulation_text = dive_text;
+    }
+    
+    fn simulate_dive_steps(&self, dive_params: &mut DiveParameters, tissues: &mut [Tissue; 16], temperature: f32) -> SimulationOutputs {
+        use dive_computer_deco::simulate::simulate_with_ascent_from_depth;
+        
+        let mut combined_results = SimulationOutputs::new();
+        let mut current_depth = 0.0;
+        
+        for (step_num, step) in self.dive_steps.iter().enumerate() {
+            let is_last_step = step_num == self.dive_steps.len() - 1;
+            
+            // For each step, simulate from current depth to target depth
+            let step_results = simulate_with_ascent_from_depth(
+                dive_params,
+                tissues,
+                self.surface_pressure,
+                current_depth,
+                step.depth,
+                temperature,
+                10.0, // 10-second intervals
+                step.duration * 60.0, // Convert minutes to seconds
+                is_last_step, // Only include ascent on the last step
+            );
+            
+            // Append results to combined results
+            combined_results.depths.extend(step_results.depths);
+            combined_results.pressures.extend(step_results.pressures);
+            combined_results.tissues_per_interval.extend(step_results.tissues_per_interval);
+            
+            // Update current depth for next step
+            current_depth = step.depth;
+        }
+        
+        combined_results
+    }
+
+    fn calculate_deco_stops_from_results(&self, results: &SimulationOutputs) -> Vec<(f32, f32)> {
+        let mut deco_stops: Vec<(f32, f32)> = Vec::new();
+        
+        if results.depths.is_empty() {
+            return deco_stops;
+        }
+        
+        let mut current_stop_depth: Option<f32> = None;
+        let mut stop_start_time: f32 = 0.0;
+        let mut in_ascent_phase: bool = false;
+        let mut max_depth_reached: f32 = 0.0;
+        let mut ascending_from_max = false;
+        
+        // First pass: find maximum depth to determine when ascent starts
+        for &depth in &results.depths {
+            if depth > max_depth_reached {
+                max_depth_reached = depth;
+            }
+        }
+        
+        // Calculate total bottom time to help identify when ascent truly begins
+        let total_bottom_time_seconds: f32 = self.dive_steps.iter().map(|step| step.duration * 60.0).sum();
+        let estimated_bottom_intervals = (total_bottom_time_seconds / 10.0) as usize;
+        
+        for (i, &depth) in results.depths.iter().enumerate() {
+            let time_minutes = i as f32 * 10.0 / 60.0; // Convert from 10-second intervals
+            
+            // More sophisticated ascent detection:
+            // 1. We must be past the estimated bottom time
+            // 2. We must be ascending from the maximum depth
+            // 3. We must be at a depth that could be a decompression stop (multiple of 3m, >= 3m)
+            if !in_ascent_phase {
+                if i > estimated_bottom_intervals && 
+                   depth < max_depth_reached - 1.0_f32 && 
+                   !ascending_from_max {
+                    ascending_from_max = true;
+                }
+                
+                if ascending_from_max && depth < max_depth_reached - 2.0_f32 {
+                    in_ascent_phase = true;
+                }
+            }
+            
+            if in_ascent_phase && depth > 0.0 {
+                // Only consider depths that are likely decompression stops:
+                // - Multiple of 3 meters (standard deco stop depths)
+                // - Between 3m and 50m
+                // - Not the original dive step depths
+                let is_deco_stop_depth = depth >= 3.0_f32 && 
+                                       depth <= 50.0_f32 && 
+                                       (depth % 3.0_f32).abs() < 0.5_f32 &&
+                                       !self.dive_steps.iter().any(|step| (step.depth - depth).abs() < 1.0_f32);
+                
+                if !is_deco_stop_depth {
+                    // Reset current stop if we're not at a valid deco depth
+                    if let Some(stop_depth) = current_stop_depth {
+                        let stop_duration = time_minutes - stop_start_time;
+                        if stop_duration >= 1.0_f32 { // Minimum 1 minute for a deco stop
+                            deco_stops.push((stop_depth, stop_duration));
+                        }
+                        current_stop_depth = None;
+                    }
+                    continue;
+                }
+                
+                // Check if we're at a constant depth (potential deco stop)
+                if let Some(stop_depth) = current_stop_depth {
+                    if (depth - stop_depth).abs() < 0.5_f32 {
+                        // Still at the same stop depth
+                        continue;
+                    } else {
+                        // We've moved from the stop depth
+                        let stop_duration = time_minutes - stop_start_time;
+                        if stop_duration >= 1.0_f32 { // Minimum 1 minute for a deco stop
+                            deco_stops.push((stop_depth, stop_duration));
+                        }
+                        current_stop_depth = None;
+                    }
+                }
+                
+                // Check if we're starting a new deco stop
+                // Look ahead to see if we stay at this depth
+                if current_stop_depth.is_none() {
+                    let mut same_depth_count = 0;
+                    let check_ahead = 12; // Check next 12 intervals (2 minutes)
+                    
+                    for j in (i + 1)..(i + 1 + check_ahead).min(results.depths.len()) {
+                        if (results.depths[j] - depth).abs() < 0.5_f32 {
+                            same_depth_count += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    // If we stay at the same depth for at least 1 minute, it's likely a deco stop
+                    if same_depth_count >= 6 {
+                        current_stop_depth = Some(depth);
+                        stop_start_time = time_minutes;
+                    }
+                }
+            }
+        }
+        
+        // Handle any ongoing stop at the end
+        if let Some(stop_depth) = current_stop_depth {
+            let final_time = results.depths.len() as f32 * 10.0 / 60.0;
+            let stop_duration = final_time - stop_start_time;
+            if stop_duration >= 1.0_f32 {
+                deco_stops.push((stop_depth, stop_duration));
+            }
+        }
+        
+        // Sort by depth (deepest first)
+        deco_stops.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        
+        deco_stops
     }
 }
 
