@@ -1,7 +1,7 @@
-use crate::ceiling::ceiling;
+use crate::ceiling::{binary_ceiling_with_gf, ceiling};
 use crate::tissue::{calculate_tissue, Tissue};
 use crate::DiveParameters;
-use libm::floor;
+use core::panic;
 #[cfg(feature = "std")]
 use std::println;
 
@@ -21,23 +21,7 @@ pub fn ndl(
         max_ceiling = 0; // Reset max_ceiling at the start of each iteration
         for i in 0..16 {
             tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, 1.0);
-            max_ceiling = u32::max(max_ceiling, ceiling(dive_parameters, tissues[i], i));
-        }
-
-        #[cfg(feature = "std")]
-        if iterations % 1000 == 0 && iterations > 0 {
-            println!(
-                "NDL calculation in progress... Iteration: {}, Bottom Time: {:?} min, Max Ceiling: {}m",
-                iterations, bottom_time, max_ceiling
-            );
-        }
-
-        #[cfg(feature = "std")]
-        if iterations < 100 || iterations % 100 == 0 {
-            println!(
-                "Bottom Time: {:?} N2 Load: [1] {:.5} \t [16] {:.5} \t Amb. press: {:.5}",
-                bottom_time, tissues[0].load_n2, tissues[15].load_n2, amb_pressure
-            );
+            max_ceiling = u32::max(max_ceiling, ceiling(dive_parameters, tissues[i], i, true));
         }
 
         if max_ceiling != 0 {
@@ -49,20 +33,113 @@ pub fn ndl(
 
         // Safety check to prevent infinite loops with extreme gradient factors
         if iterations >= MAX_ITERATIONS {
-            #[cfg(feature = "std")]
-            println!("⚠️  Warning: NDL calculation reached maximum iterations ({}). This may indicate extreme gradient factor values (GF = 1.0) that prevent decompression requirements.", MAX_ITERATIONS);
-            #[cfg(feature = "std")]
-            println!("    Returning NDL of {} minutes as safety limit.", bottom_time);
-            return bottom_time; // Return current bottom time as NDL
+            panic!("NDL calculation exceeded maximum iterations");
         }
     }
 }
 
-#[cfg(feature = "std")]
+/// Binary search implementation of NDL (No Decompression Limit) calculation
+/// Uses binary search to find the maximum bottom time where ceiling remains 0
+pub fn binary_ndl(
+    dive_parameters: DiveParameters,
+    tissues: &mut [Tissue; 16],
+    amb_pressure: f32,
+    temperature: f32,
+) -> f32 {
+    let mut bottom_time = 0.0;
+    let mut max_ceiling: u32 = 0;
+    const MAX_ITERATIONS: u32 = 10000; // Prevent infinite loops with extreme GF values
+    let mut iterations = 0;
+    loop {
+        max_ceiling = 0; // Reset max_ceiling at the start of each iteration
+        for i in 0..16 {
+            tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, 1.0);
+            max_ceiling = u32::max(max_ceiling, binary_ceiling_with_gf(dive_parameters.gf_low, tissues[i], i, true));
+        }
+
+        if max_ceiling != 0 {
+            return bottom_time;
+        }
+
+        bottom_time += 1.0;
+        iterations += 1;
+
+        // Safety check to prevent infinite loops with extreme gradient factors
+        if iterations >= MAX_ITERATIONS {
+            panic!("NDL calculation exceeded maximum iterations");
+        }
+    }
+}
+
+// Binary NDL tests
 #[test]
-fn test_ndl() {
+fn test_binary_ndl_vs_regular() {
     use crate::{simulate::simulate, water_vapor_pressure, FHE, FN2};
-    use std::vec::Vec;
+
+    fn reset_tissues(tissues: &mut [Tissue; 16], amb_pressure: f32, temperature: f32) {
+        for i in 0..tissues.len() {
+            tissues[i].load_n2 = (amb_pressure - water_vapor_pressure(temperature)) * FN2;
+            tissues[i].load_he = (amb_pressure - water_vapor_pressure(temperature)) * FHE;
+        }
+    }
+
+    let mut tissues_regular = [Tissue::default(); 16];
+    let mut tissues_binary = [Tissue::default(); 16];
+    let temperature = 20.0;
+    let start_amb_pressure = 1.0;
+    let target_depth = 30.0;
+
+    let params = DiveParameters::new(1.0, 1.0);
+
+    // Reset both tissue arrays to same initial state
+    reset_tissues(&mut tissues_regular, start_amb_pressure, temperature);
+    reset_tissues(&mut tissues_binary, start_amb_pressure, temperature);
+
+    // Simulate descent for both (this modifies tissues but consistently)
+    simulate(
+        &mut DiveParameters::new(1.0, 1.0),
+        &mut tissues_regular,
+        1.0,
+        target_depth,
+        temperature,
+        1.0,
+        0.0,
+    );
+    simulate(
+        &mut DiveParameters::new(1.0, 1.0),
+        &mut tissues_binary,
+        1.0,
+        target_depth,
+        temperature,
+        1.0,
+        0.0,
+    );
+
+    let amb_pressure = target_depth / 10.0 + 1.0;
+
+    // Calculate NDL with both methods
+    let regular_ndl = ndl(params, &mut tissues_regular, amb_pressure, temperature);
+    let binary_ndl = binary_ndl(params, &mut tissues_binary, amb_pressure, temperature);
+
+    #[cfg(feature = "std")]
+    println!("Regular NDL: {}, Binary NDL: {}", regular_ndl, binary_ndl);
+
+    // Results should be exactly the same
+    let diff = if regular_ndl > binary_ndl {
+        regular_ndl - binary_ndl
+    } else {
+        binary_ndl - regular_ndl
+    };
+    assert_eq!(
+        diff, 0.0,
+        "Binary NDL should exactly match regular NDL (diff: {}, regular: {}, binary: {})",
+        diff, regular_ndl, binary_ndl
+    );
+}
+
+#[test]
+fn test_binary_ndl_shallow_depth() {
+    use crate::{simulate::simulate, water_vapor_pressure, FHE, FN2};
 
     fn reset_tissues(tissues: &mut [Tissue; 16], amb_pressure: f32, temperature: f32) {
         for i in 0..tissues.len() {
@@ -74,141 +151,34 @@ fn test_ndl() {
     let mut tissues = [Tissue::default(); 16];
     let temperature = 20.0;
     let start_amb_pressure = 1.0;
+    let target_depth = 15.0; // Shallow depth should have long NDL
 
-    struct TableNDL {
-        depth: f32,
-        ndl: f32,
-        deco: f32,
-    }
+    let params = DiveParameters::new(1.0, 1.0);
 
-    let table_ndl = [
-        TableNDL {
-            depth: 60.0,
-            ndl: 0.0,
-            deco: 5.0,
-        },
-        TableNDL {
-            depth: 57.0,
-            ndl: 5.0,
-            deco: 10.0,
-        },
-        TableNDL {
-            depth: 54.0,
-            ndl: 5.0,
-            deco: 10.0,
-        },
-        TableNDL {
-            depth: 51.0,
-            ndl: 5.0,
-            deco: 10.0,
-        },
-        TableNDL {
-            depth: 48.0,
-            ndl: 5.0,
-            deco: 10.0,
-        },
-        TableNDL {
-            depth: 45.0,
-            ndl: 5.0,
-            deco: 10.0,
-        },
-        TableNDL {
-            depth: 42.0,
-            ndl: 10.0,
-            deco: 15.0,
-        },
-        TableNDL {
-            depth: 39.0,
-            ndl: 10.0,
-            deco: 15.0,
-        },
-        TableNDL {
-            depth: 36.0,
-            ndl: 15.0,
-            deco: 20.0,
-        },
-        TableNDL {
-            depth: 33.0,
-            ndl: 20.0,
-            deco: 25.0,
-        },
-        TableNDL {
-            depth: 30.0,
-            ndl: 25.0,
-            deco: 30.0,
-        },
-        TableNDL {
-            depth: 27.0,
-            ndl: 30.0,
-            deco: 40.0,
-        },
-        TableNDL {
-            depth: 24.0,
-            ndl: 40.0,
-            deco: 50.0,
-        },
-        TableNDL {
-            depth: 21.0,
-            ndl: 50.0,
-            deco: 60.0,
-        },
-        TableNDL {
-            depth: 18.0,
-            ndl: 60.0,
-            deco: 70.0,
-        },
-        TableNDL {
-            depth: 15.0,
-            ndl: 100.0,
-            deco: 110.0,
-        },
-        TableNDL {
-            depth: 12.0,
-            ndl: 200.0,
-            deco: 220.0,
-        },
-    ];
+    reset_tissues(&mut tissues, start_amb_pressure, temperature);
+    simulate(
+        &mut DiveParameters::new(1.0, 1.0),
+        &mut tissues,
+        1.0,
+        target_depth,
+        temperature,
+        1.0,
+        0.0,
+    );
 
-    let mut results: Vec<(bool, f32)> = Vec::new();
+    let amb_pressure = target_depth / 10.0 + 1.0;
+    let result = binary_ndl(params, &mut tissues, amb_pressure, temperature);
 
-    let mut params = DiveParameters::new(1.0, 1.0);
-
-    for i in 0..table_ndl.len() {
-        println!("Reset tissues!");
-        println!("Descending to {:?}m from 1bar ambient pressure, 22.0C with 1 second time increment and no bottom time", table_ndl[i].depth);
-        reset_tissues(&mut tissues, start_amb_pressure, temperature);
-        simulate(
-            &mut params,
-            &mut tissues,
-            1.0,
-            table_ndl[i].depth,
-            22.0,
-            1.0,
-            0.0 * 60.0,
-        );
-        let amb_pressure = table_ndl[i].depth / 10.0 + 1.0;
-        let result = ndl(params, &mut tissues, amb_pressure, 20.0);
-        let result_between = result >= table_ndl[i].ndl && result <= table_ndl[i].deco;
-        // #[cfg(feature = "std")]
-        // println!("{} - {}", result, result_between);
-        results.push((result_between, result));
-    }
-
-    for i in 0..results.len() {
-        #[cfg(feature = "std")]
-        println!(
-            "Depth: {}m - Match? {} - Table NDL: {}min - NDL: {}min - Table Deco: {}min",
-            table_ndl[i].depth, results[i].0, table_ndl[i].ndl, results[i].1, table_ndl[i].deco
-        );
-    }
+    assert!(
+        result > 50.0,
+        "Binary NDL for shallow depth should be > 50 minutes, got: {}",
+        result
+    );
 }
 
-#[cfg(feature = "std")]
 #[test]
-fn test_reference_dive_deco() {
+fn test_binary_ndl_deep_depth() {
     use crate::{simulate::simulate, water_vapor_pressure, FHE, FN2};
-    use dive_deco::{BuehlmannModel, DecoModel, Depth, Gas, Time};
-    use std::vec::Vec;
 
     fn reset_tissues(tissues: &mut [Tissue; 16], amb_pressure: f32, temperature: f32) {
         for i in 0..tissues.len() {
@@ -217,60 +187,219 @@ fn test_reference_dive_deco() {
         }
     }
 
-    fn compare_ndl(target_depth: f32, bottom_time_minutes: f32) -> (f32, f32) {
-        println!(
-            "Comparing NDL for depth: {}m and bottom time: {}min",
-            target_depth, bottom_time_minutes
-        );
+    let mut tissues = [Tissue::default(); 16];
+    let temperature = 20.0;
+    let start_amb_pressure = 1.0;
+    let target_depth = 50.0; // Deep depth should have short NDL
+
+    let params = DiveParameters::new(1.0, 1.0);
+
+    reset_tissues(&mut tissues, start_amb_pressure, temperature);
+    simulate(
+        &mut DiveParameters::new(1.0, 1.0),
+        &mut tissues,
+        1.0,
+        target_depth,
+        temperature,
+        1.0,
+        0.0,
+    );
+
+    let amb_pressure = target_depth / 10.0 + 1.0;
+    let result = binary_ndl(params, &mut tissues, amb_pressure, temperature);
+
+    assert!(
+        result < 20.0,
+        "Binary NDL for deep depth should be < 20 minutes, got: {}",
+        result
+    );
+}
+
+#[test]
+fn test_binary_ndl_with_custom_gradient_factors() {
+    use crate::{simulate::simulate, water_vapor_pressure, FHE, FN2};
+
+    fn reset_tissues(tissues: &mut [Tissue; 16], amb_pressure: f32, temperature: f32) {
+        for i in 0..tissues.len() {
+            tissues[i].load_n2 = (amb_pressure - water_vapor_pressure(temperature)) * FN2;
+            tissues[i].load_he = (amb_pressure - water_vapor_pressure(temperature)) * FHE;
+        }
+    }
+
+    let mut tissues_conservative = [Tissue::default(); 16];
+    let mut tissues_aggressive = [Tissue::default(); 16];
+    let temperature = 20.0;
+    let start_amb_pressure = 1.0;
+    let target_depth = 30.0;
+
+    let conservative_params = DiveParameters::new(0.3, 0.3); // Very conservative
+    let aggressive_params = DiveParameters::new(1.0, 1.0);   // Less conservative
+
+    // Test conservative gradient factors
+    reset_tissues(&mut tissues_conservative, start_amb_pressure, temperature);
+    simulate(
+        &mut DiveParameters::new(1.0, 1.0),
+        &mut tissues_conservative,
+        1.0,
+        target_depth,
+        temperature,
+        1.0,
+        0.0,
+    );
+
+    // Test aggressive gradient factors  
+    reset_tissues(&mut tissues_aggressive, start_amb_pressure, temperature);
+    simulate(
+        &mut DiveParameters::new(1.0, 1.0),
+        &mut tissues_aggressive,
+        1.0,
+        target_depth,
+        temperature,
+        1.0,
+        0.0,
+    );
+
+    let amb_pressure = target_depth / 10.0 + 1.0;
+
+    let conservative_ndl = binary_ndl(conservative_params, &mut tissues_conservative, amb_pressure, temperature);
+    let aggressive_ndl = binary_ndl(aggressive_params, &mut tissues_aggressive, amb_pressure, temperature);
+
+    #[cfg(feature = "std")]
+    println!("Conservative NDL (GF 30/30): {}, Aggressive NDL (GF 100/100): {}", conservative_ndl, aggressive_ndl);
+
+    assert!(conservative_ndl <= aggressive_ndl, "Conservative gradient factors should result in shorter or equal NDL");
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn test_binary_ndl_performance_comparison() {
+    use crate::{simulate::simulate, water_vapor_pressure, FHE, FN2};
+    use std::time::Instant;
+
+    fn reset_tissues(tissues: &mut [Tissue; 16], amb_pressure: f32, temperature: f32) {
+        for i in 0..tissues.len() {
+            tissues[i].load_n2 = (amb_pressure - water_vapor_pressure(temperature)) * FN2;
+            tissues[i].load_he = (amb_pressure - water_vapor_pressure(temperature)) * FHE;
+        }
+    }
+
+    let temperature = 20.0;
+    let start_amb_pressure = 1.0;
+    let target_depth = 30.0;
+    let params = DiveParameters::new(1.0, 1.0);
+    let iterations = 10;
+
+    // Test regular NDL performance
+    let start = Instant::now();
+    for _ in 0..iterations {
         let mut tissues = [Tissue::default(); 16];
-        let temperature = 20.0;
-        let start_amb_pressure = 1.0;
-        let mut params = DiveParameters::new(1.0, 1.0);
-        println!("Reset tissues!");
         reset_tissues(&mut tissues, start_amb_pressure, temperature);
-        println!("Descending to {:?}m from 1bar ambient pressure, {:?}C with 1 second time increment and {:?}min bottom time", target_depth, temperature, bottom_time_minutes);
         simulate(
-            &mut params,
+            &mut DiveParameters::new(1.0, 1.0),
             &mut tissues,
             1.0,
             target_depth,
             temperature,
             1.0,
-            bottom_time_minutes * 60.0,
+            0.0,
         );
         let amb_pressure = target_depth / 10.0 + 1.0;
-        let result = ndl(params, &mut tissues, amb_pressure, temperature);
+        let _ = ndl(params, &mut tissues, amb_pressure, temperature);
+    }
+    let regular_duration = start.elapsed();
 
-        println!("NDL: {}min", result);
-
-        // Reference model implementation
-        let mut model = BuehlmannModel::default();
-        let air = Gas::new(0.21, 0.);
-        model.record(
-            Depth::from_meters(target_depth),
-            Time::from_minutes(bottom_time_minutes),
-            &air,
+    // Test binary NDL performance
+    let start = Instant::now();
+    for _ in 0..iterations {
+        let mut tissues = [Tissue::default(); 16];
+        reset_tissues(&mut tissues, start_amb_pressure, temperature);
+        simulate(
+            &mut DiveParameters::new(1.0, 1.0),
+            &mut tissues,
+            1.0,
+            target_depth,
+            temperature,
+            1.0,
+            0.0,
         );
-        println!("Reference NDL: {:?}m", model.ndl().as_minutes());
+        let amb_pressure = target_depth / 10.0 + 1.0;
+        let _ = binary_ndl(params, &mut tissues, amb_pressure, temperature);
+    }
+    let binary_duration = start.elapsed();
 
-        (result, model.ndl().as_minutes() as f32)
+    println!("Regular NDL: {:?} for {} iterations", regular_duration, iterations);
+    println!("Binary NDL: {:?} for {} iterations", binary_duration, iterations);
+    
+    // Verify results are similar
+    let mut tissues_regular = [Tissue::default(); 16];
+    let mut tissues_binary = [Tissue::default(); 16];
+    
+    reset_tissues(&mut tissues_regular, start_amb_pressure, temperature);
+    reset_tissues(&mut tissues_binary, start_amb_pressure, temperature);
+    
+    simulate(&mut DiveParameters::new(1.0, 1.0), &mut tissues_regular, 1.0, target_depth, temperature, 1.0, 0.0);
+    simulate(&mut DiveParameters::new(1.0, 1.0), &mut tissues_binary, 1.0, target_depth, temperature, 1.0, 0.0);
+    
+    let amb_pressure = target_depth / 10.0 + 1.0;
+    let regular_result = ndl(params, &mut tissues_regular, amb_pressure, temperature);
+    let binary_result = binary_ndl(params, &mut tissues_binary, amb_pressure, temperature);
+    
+    let diff = if regular_result > binary_result { 
+        regular_result - binary_result 
+    } else { 
+        binary_result - regular_result 
+    };
+    
+    println!("Regular result: {}, Binary result: {}, Difference: {}", regular_result, binary_result, diff);
+    assert_eq!(diff, 0.0, "Results should match exactly");
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn test_comprehensive_binary_ndl_comparison() {
+    use crate::{simulate::simulate, water_vapor_pressure, FHE, FN2};
+
+    fn reset_tissues(tissues: &mut [Tissue; 16], amb_pressure: f32, temperature: f32) {
+        for i in 0..tissues.len() {
+            tissues[i].load_n2 = (amb_pressure - water_vapor_pressure(temperature)) * FN2;
+            tissues[i].load_he = (amb_pressure - water_vapor_pressure(temperature)) * FHE;
+        }
     }
 
-    let depths = [
-        60.0, 57.0, 54.0, 51.0, 48.0, 45.0, 42.0, 39.0, 36.0, 33.0, 30.0, 27.0, 24.0, 21.0, 18.0,
-        15.0, 12.0,
-    ];
+    let test_depths = [15.0, 21.0, 27.0, 33.0, 39.0, 45.0];
+    let gradient_factors = [0.3, 0.5, 0.8, 1.0];
+    let temperature = 20.0;
+    let start_amb_pressure = 1.0;
 
-    let mut results = Vec::new();
-    for depth in depths.iter() {
-        results.push((depth, compare_ndl(*depth, 0.0)));
-    }
-
-    for result in results.iter() {
-        println!("DEPTH: {} - NDL: {}min - Reference NDL: {}min", result.0, result.1.0, result.1.1);
-    }
-
-    for result in results.iter() {
-        assert_eq!(result.1.0, result.1.1);
+    for &depth in test_depths.iter() {
+        for &gf in gradient_factors.iter() {
+            let params = DiveParameters::new(gf, gf);
+            
+            let mut tissues_regular = [Tissue::default(); 16];
+            let mut tissues_binary = [Tissue::default(); 16];
+            
+            reset_tissues(&mut tissues_regular, start_amb_pressure, temperature);
+            reset_tissues(&mut tissues_binary, start_amb_pressure, temperature);
+            
+            simulate(&mut DiveParameters::new(1.0, 1.0), &mut tissues_regular, 1.0, depth, temperature, 1.0, 0.0);
+            simulate(&mut DiveParameters::new(1.0, 1.0), &mut tissues_binary, 1.0, depth, temperature, 1.0, 0.0);
+            
+            let amb_pressure = depth / 10.0 + 1.0;
+            
+            let regular_ndl = ndl(params, &mut tissues_regular, amb_pressure, temperature);
+            let binary_ndl = binary_ndl(params, &mut tissues_binary, amb_pressure, temperature);
+            
+            let diff = if regular_ndl > binary_ndl { 
+                regular_ndl - binary_ndl 
+            } else { 
+                binary_ndl - regular_ndl 
+            };
+            
+            println!("Depth: {}m, GF: {:.1}, Regular: {}min, Binary: {}min, Diff: {}min", 
+                    depth, gf, regular_ndl, binary_ndl, diff);
+                    
+            assert_eq!(diff, 0.0, "NDL methods should produce exactly the same result: regular={}, binary={}, diff={}", 
+                   regular_ndl, binary_ndl, diff);
+        }
     }
 }

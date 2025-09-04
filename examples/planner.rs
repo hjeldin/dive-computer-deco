@@ -1,3 +1,13 @@
+//! Dive Computer Decompression Planner
+//!
+//! This example demonstrates the built-in dive-computer-deco library functionality
+//! for decompression calculations.
+//!
+//! For comparison with an external reference implementation, see:
+//! `dive_deco_planner.rs` - Uses the external dive-deco crate
+//!
+//! Run with: `cargo run --example planner`
+
 use dive_computer_deco::{
     DiveParameters, 
     tissue::Tissue, 
@@ -93,7 +103,7 @@ fn main() {
     // Get dive parameters from user input
     println!("Enter dive parameters:");
     let gf_high_input = get_float_input("GF High (0.0-1.0)", 0.8);
-    let gf_low_input = get_float_input("GF Low (0.0-1.0)", 0.80);
+    let gf_low_input = get_float_input("GF Low (0.0-1.0)", 0.8);
     let surface_pressure = get_float_input("Surface pressure (bar)", 1.0);
     let temperature = get_float_input("Water temperature (°C)", 37.0);
 
@@ -339,14 +349,14 @@ fn analyze_decompression_stops(depths: &[f32], interval_seconds: f32) {
         println!("No decompression stops detected");
     } else {
         println!("Decompression stops found:");
-        println!("Depth (m) | Duration (min) | Start Time (min) | End Time (min)");
-        println!("----------|----------------|------------------|----------------");
+        println!("Depth (m) | Duration (secs) | Duration (min) | Start Time (min) | End Time (min)");
+        println!("----------|----------------|----------------|------------------|----------------");
         
         let total_deco_time: f32 = stops.iter().map(|(_, duration, _)| duration).sum();
         let num_stops = stops.len();
         
         for (depth, duration, start_time) in &stops {
-            println!("   {:4.1}   |     {:6.1}     |      {:6.1}      |      {:6.1}", depth, duration, start_time, start_time + duration);
+            println!("   {:4.1}   |     {:6.1}     |     {:6.1}     |      {:6.1}      |      {:6.1}", depth, duration * 60., duration, start_time, start_time + duration);
         }
         
         println!("\nTotal decompression time: {:.1} minutes", total_deco_time);

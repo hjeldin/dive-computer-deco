@@ -70,7 +70,8 @@ pub const FHE: f32 = 0.0;
 //     He,
 // }
 
-use crate::ceiling::max_ceiling;
+use crate::ceiling::{max_ceiling, binary_ceiling};
+use crate::ndl::binary_ndl;
 use crate::m_value::calculate_m_values;
 use crate::tissue::{calculate_tissue, Tissue};
 

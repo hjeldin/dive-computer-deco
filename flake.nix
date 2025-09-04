@@ -12,12 +12,20 @@
   outputs = { self, nixpkgs, rust-overlay }:
     let
       supportedSystems = [ "x86_64-linux" "thumbv7em-none-eabi" ];
-      forEachSupportedSystem = f: nixpkgs.lib.genAttrs supportedSystems (system: f {
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ rust-overlay.overlays.default self.overlays.default ];
-        };
-      });
+      forEachSupportedSystem = f: nixpkgs.lib.genAttrs supportedSystems (system: 
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default self.overlays.default ];
+          };
+          libPath = with pkgs; lib.makeLibraryPath [
+            wayland-protocols
+            wayland
+            libxkbcommon
+            libGL
+          ];
+        in
+        f { inherit pkgs libPath; });
     in
     {
       overlays.default = final: prev: {
@@ -30,12 +38,12 @@
           else if builtins.pathExists ./rust-toolchain then
             rust.fromRustupToolchainFile ./rust-toolchain
           else
-            rust.stable.latest.default.override {
+            rust.nightly.latest.default.override {
               extensions = [ "rust-src" "rustfmt" ];
             };
       };
 
-      devShells = forEachSupportedSystem ({ pkgs }: {
+      devShells = forEachSupportedSystem ({ pkgs, libPath }: {
         default = pkgs.mkShell {
           packages = with pkgs; [
             SDL2
@@ -64,6 +72,17 @@
             gef
             rustup
 
+            # GUI and desktop application dependencies
+            cmake
+            ninja
+            fontconfig
+            freetype
+            libGL
+            libGLU
+            wayland
+            wayland-protocols
+            libxkbcommon
+
             # Rust Embedded
             (rust-bin.stable.latest.default.override {
               extensions = [ "rust-src" ];
@@ -73,6 +92,20 @@
 
           buildInputs = with pkgs; [
             SDL2
+            xorg.libX11
+            xorg.libXft
+            xorg.libXext
+            xorg.libXinerama
+            xorg.libXcursor
+            xorg.libXrender
+            xorg.libXfixes
+            fontconfig
+            freetype
+            libGL
+            libGLU
+            wayland
+            wayland-protocols
+            libxkbcommon
           ];
 
           nativeBuildInputs = with pkgs; [
@@ -82,9 +115,18 @@
           env = {
             # Required by rust-analyzer
             RUST_SRC_PATH = "${pkgs.rustToolchain}/lib/rustlib/src/rust/library";
-#            LIBCLANG_PATH = "${pkgs.libclang}/lib";
             LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib";
           };
+
+          shellHook = ''
+            echo "Using Rust toolchain: $(rustc --version)"
+
+            export CARGO_HOME="$HOME/.cargo"
+            export RUSTUP_HOME="$HOME/.rustup"
+            export LD_LIBRARY_PATH="${libPath}"
+            echo "Set LD_LIBRARY_PATH to ${libPath}"
+            mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
+          '';
         };
       });
     };
