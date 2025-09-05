@@ -23,6 +23,8 @@ taffy = { version = "0.7.7", default-features = false, features = [
   "taffy_tree",
   "detailed_layout_info",
 ] }
+fitparser = "0.10.0"
+rfd = "0.14"
 
 [patch.crates-io]
 

@@ -8,8 +8,9 @@ use dive_computer_deco::{
     m_value::calculate_m_values,
     water_vapor_pressure, FN2, FHE,
 };
+use std::path::Path;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct DiveStep {
     depth: f32,
     duration: f32, // in minutes
@@ -22,6 +23,14 @@ impl DiveStep {
             duration: 20.0,
         }
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DivePlan {
+    gf_low: f32,
+    gf_high: f32,
+    surface_pressure: f32,
+    dive_steps: Vec<DiveStep>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -252,11 +261,38 @@ impl DivePlannerApp {
         
         // Large simulation button
         let button_response = ui.add_sized([ui.available_width(), 32.0], 
-            egui::Button::new("� Simulate Dive"));
+            egui::Button::new("🏊 Simulate Dive"));
         
         if button_response.clicked() {
             self.run_simulation();
         }
+        
+        ui.add_space(8.0);
+        
+        // File operations
+        ui.horizontal(|ui| {
+            if ui.button("📁 Load Dive Plan").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("JSON files", &["json"])
+                    .add_filter("All files", &["*"])
+                    .set_title("Load Dive Plan")
+                    .pick_file()
+                {
+                    self.load_dive_plan(&path);
+                }
+            }
+            
+            if ui.button("💾 Save Dive Plan").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("JSON files", &["json"])
+                    .add_filter("All files", &["*"])
+                    .set_title("Save Dive Plan")
+                    .save_file()
+                {
+                    self.save_dive_plan(&path);
+                }
+            }
+        });
         
         ui.add_space(8.0);
         ui.separator();
@@ -798,6 +834,50 @@ impl DivePlannerApp {
         deco_stops.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
         
         deco_stops
+    }
+    
+    fn load_dive_plan(&mut self, path: &Path) {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => {
+                match serde_json::from_str::<DivePlan>(&contents) {
+                    Ok(plan) => {
+                        self.gf_low = plan.gf_low;
+                        self.gf_high = plan.gf_high;
+                        self.surface_pressure = plan.surface_pressure;
+                        self.dive_steps = plan.dive_steps;
+                        // Clear simulation results when loading a new plan
+                        self.simulation_results = None;
+                        self.simulation_text = String::new();
+                    }
+                    Err(e) => {
+                        self.simulation_text = format!("Error parsing dive plan: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                self.simulation_text = format!("Error reading file: {}", e);
+            }
+        }
+    }
+    
+    fn save_dive_plan(&self, path: &Path) {
+        let plan = DivePlan {
+            gf_low: self.gf_low,
+            gf_high: self.gf_high,
+            surface_pressure: self.surface_pressure,
+            dive_steps: self.dive_steps.clone(),
+        };
+        
+        match serde_json::to_string_pretty(&plan) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(path, json) {
+                    eprintln!("Error saving dive plan: {}", e);
+                }
+            }
+            Err(e) => {
+                eprintln!("Error serializing dive plan: {}", e);
+            }
+        }
     }
 }
 
