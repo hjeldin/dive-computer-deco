@@ -2,13 +2,14 @@ use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use dive_computer_deco::{
     DiveParameters,
-    tissue::{Tissue, calculate_tissue},
+    tissue::Tissue,
     simulate::SimulationOutputs,
     ceiling::max_ceiling_with_gf,
     m_value::calculate_m_values,
     water_vapor_pressure, FN2, FHE,
 };
 use std::path::Path;
+use fitparser;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct DiveStep {
@@ -30,6 +31,8 @@ struct DivePlan {
     gf_low: f32,
     gf_high: f32,
     surface_pressure: f32,
+    descent_speed: f32,
+    ascent_speed: f32,
     dive_steps: Vec<DiveStep>,
 }
 
@@ -39,11 +42,28 @@ enum PlotTab {
     TissuePressure,
 }
 
+#[derive(Debug, Clone)]
+struct FitActivityData {
+    timestamps: Vec<f64>, // time in minutes from start
+    depths: Vec<f32>,     // depth in meters
+}
+
+impl FitActivityData {
+    fn new() -> Self {
+        Self {
+            timestamps: Vec::new(),
+            depths: Vec::new(),
+        }
+    }
+}
+
 struct DivePlannerApp {
     // Dive parameters
     gf_low: f32,
     gf_high: f32,
     surface_pressure: f32,
+    descent_speed: f32,
+    ascent_speed: f32,
     
     // Dive profile
     dive_steps: Vec<DiveStep>,
@@ -52,12 +72,22 @@ struct DivePlannerApp {
     simulation_results: Option<SimulationOutputs>,
     simulation_text: String,
     
+    // FIT activity data
+    fit_activity_data: Option<FitActivityData>,
+    
     // UI state
     show_ceiling: bool,
     show_depth: bool,
     show_pressure: bool,
+    show_fit_activity: bool,
+    smoothing_window: usize, // Smoothing window size for FIT activity data
     active_tab: PlotTab,
     tissue_visibility: [bool; 16], // Visibility toggle for each tissue compartment
+    
+    // Velocity tracking
+    current_velocity: Option<f32>, // Current velocity in m/min at hover point
+    hover_time: Option<f64>, // Current hover time in minutes
+    hover_depth: Option<f32>, // Current hover depth in meters
 }
 
 impl Default for DivePlannerApp {
@@ -66,14 +96,22 @@ impl Default for DivePlannerApp {
             gf_low: 0.30,
             gf_high: 0.85,
             surface_pressure: 1.0,
+            descent_speed: 20.0,  // m/min
+            ascent_speed: 10.0,   // m/min
             dive_steps: vec![DiveStep::new()],
             simulation_results: None,
             simulation_text: String::new(),
+            fit_activity_data: None,
             show_ceiling: true,
             show_depth: true,
             show_pressure: false,
+            show_fit_activity: true,
+            smoothing_window: 5, // Default smoothing window size
             active_tab: PlotTab::DiveProfile,
             tissue_visibility: [true; 16], // All tissues visible by default
+            current_velocity: None,
+            hover_time: None,
+            hover_depth: None,
         }
     }
 }
@@ -161,6 +199,20 @@ impl DivePlannerApp {
                     .speed(0.01)
                     .range(0.8..=1.2)
                     .suffix(" bar"));
+                ui.end_row();
+                
+                ui.label("Descent Speed:");
+                ui.add(egui::DragValue::new(&mut self.descent_speed)
+                    .speed(0.5)
+                    .range(5.0..=60.0)
+                    .suffix(" m/min"));
+                ui.end_row();
+                
+                ui.label("Ascent Speed:");
+                ui.add(egui::DragValue::new(&mut self.ascent_speed)
+                    .speed(0.5)
+                    .range(3.0..=30.0)
+                    .suffix(" m/min"));
                 ui.end_row();
             });
         
@@ -295,6 +347,28 @@ impl DivePlannerApp {
         });
         
         ui.add_space(8.0);
+        
+        // FIT file loading
+        ui.horizontal(|ui| {
+            if ui.button("🏊‍♀️ Load .fit Activity").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("FIT files", &["fit"])
+                    .add_filter("All files", &["*"])
+                    .set_title("Load FIT Activity File")
+                    .pick_file()
+                {
+                    self.load_fit_activity(&path);
+                }
+            }
+            
+            if self.fit_activity_data.is_some() {
+                if ui.button("🗑 Clear Activity").clicked() {
+                    self.fit_activity_data = None;
+                }
+            }
+        });
+        
+        ui.add_space(8.0);
         ui.separator();
         ui.add_space(8.0);
         
@@ -310,41 +384,77 @@ impl DivePlannerApp {
                 ui.checkbox(&mut self.show_ceiling, "🚧 Ceiling");
                 ui.end_row();
                 ui.checkbox(&mut self.show_pressure, "📊 Pressure");
-                ui.label(""); // Empty cell for alignment
+                if self.fit_activity_data.is_some() {
+                    ui.checkbox(&mut self.show_fit_activity, "🏊‍♀️ FIT Activity");
+                }
                 ui.end_row();
             });
+        
+        // Smoothing control for FIT data
+        if self.fit_activity_data.is_some() {
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+            ui.label("🔧 FIT Data Smoothing:");
+            ui.add_space(4.0);
+            
+            ui.horizontal(|ui| {
+                ui.label("Window Size:");
+                ui.add(egui::Slider::new(&mut self.smoothing_window, 1..=200)
+                    .suffix(" samples")
+                    .text("smoothing"));
+            });
+            
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if ui.small_button("No Smoothing").clicked() {
+                    self.smoothing_window = 1;
+                }
+                if ui.small_button("Light").clicked() {
+                    self.smoothing_window = 3;
+                }
+                if ui.small_button("Medium").clicked() {
+                    self.smoothing_window = 5;
+                }
+                if ui.small_button("Heavy").clicked() {
+                    self.smoothing_window = 10;
+                }
+            });
+        }
     }
     
     fn results_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("📊 Simulation Results");
         ui.add_space(8.0);
         
-        if self.simulation_results.is_none() {
-            ui.colored_label(egui::Color32::GRAY, "Click 'Simulate Dive' to see results");
-            return;
-        }
-        
-        // Text results
-        ui.collapsing("Dive Summary", |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("📋 Copy").clicked() {
-                    ui.ctx().copy_text(self.simulation_text.clone());
-                }
+        // Show text results only if simulation has been run
+        if let Some(_) = self.simulation_results {
+            // Text results
+            ui.collapsing("Dive Summary", |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("📋 Copy").clicked() {
+                        ui.ctx().copy_text(self.simulation_text.clone());
+                    }
+                });
+                
+                egui::ScrollArea::vertical()
+                    .max_height(150.0) // Reduced from 200.0 to leave more space for plots
+                    .show(ui, |ui| {
+                        ui.add(egui::TextEdit::multiline(&mut self.simulation_text.as_str())
+                            .desired_width(f32::INFINITY)
+                            .font(egui::TextStyle::Monospace));
+                    });
             });
             
-            egui::ScrollArea::vertical()
-                .max_height(150.0) // Reduced from 200.0 to leave more space for plots
-                .show(ui, |ui| {
-                    ui.add(egui::TextEdit::multiline(&mut self.simulation_text.as_str())
-                        .desired_width(f32::INFINITY)
-                        .font(egui::TextStyle::Monospace));
-                });
-        });
+            ui.separator();
+            ui.add_space(8.0);
+        } else if self.fit_activity_data.is_none() {
+            ui.colored_label(egui::Color32::GRAY, "Click 'Simulate Dive' to see results or load a FIT file to view dive profile");
+            ui.add_space(8.0);
+        }
         
-        ui.separator();
-        ui.add_space(8.0);
-        
-        // Tabbed plots
+        // Always show tabbed plots (they will handle empty states internally)
         egui::TopBottomPanel::top("plot_tabs").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, PlotTab::DiveProfile, "🌊 Dive Profile");
@@ -362,21 +472,46 @@ impl DivePlannerApp {
     }
     
     fn dive_profile_plot(&mut self, ui: &mut egui::Ui) {
-        if let Some(ref results) = self.simulation_results {
-            ui.label("Dive Profile");
+        // Always show the dive profile plot
+        ui.label("Dive Profile");
+        
+        let velocity = self.current_velocity.unwrap_or(0.0);
+        let time = self.hover_time.unwrap_or(0.0);
+        let depth = self.hover_depth.unwrap_or(0.0);
+        ui.horizontal(|ui| {
+            ui.colored_label(egui::Color32::from_rgb(100, 200, 255), "📊 Hover Info:");
+            ui.colored_label(egui::Color32::LIGHT_GRAY, 
+                format!("Time: {:.1}min, Depth: {:.1}m, Velocity: {:.2} m/min", 
+                        time, depth, velocity));
             
-            // Calculate available height for the plot
-            let available_height = ui.available_height() - 40.0; // Leave some margin
-            let plot_height = available_height.max(300.0); // Minimum height of 300
-            
-            let plot = Plot::new("dive_profile")
-                .height(plot_height)
-                .legend(egui_plot::Legend::default())
-                .y_axis_label("Depth (m)")
-                .x_axis_label("Time (minutes)")
-                .include_y(0.0);
-            
-            plot.show(ui, |plot_ui| {
+            // Add velocity direction indicator
+            let direction_text = if velocity > 0.1 {
+                "⬇️ Descending"
+            } else if velocity < -0.1 {
+                "⬆️ Ascending"
+            } else {
+                "➡️ Stable"
+            };
+            ui.colored_label(
+                if velocity.abs() > 0.1 { egui::Color32::YELLOW } else { egui::Color32::GREEN },
+                direction_text
+            );
+        });
+        
+        // Calculate available height for the plot
+        let available_height = ui.available_height() - 40.0; // Leave some margin
+        let plot_height = available_height.max(300.0); // Minimum height of 300
+        
+        let plot = Plot::new("dive_profile")
+            .height(plot_height)
+            .legend(egui_plot::Legend::default())
+            .y_axis_label("Depth (m)")
+            .x_axis_label("Time (minutes)")
+            .include_y(0.0);
+        
+        let plot_response = plot.show(ui, |plot_ui| {
+            // Show simulation results if available
+            if let Some(ref results) = self.simulation_results {
                 if self.show_depth && !results.depths.is_empty() {
                     let depth_points: PlotPoints = results.depths
                         .iter()
@@ -388,7 +523,7 @@ impl DivePlannerApp {
                         .collect();
                     
                     plot_ui.line(
-                        Line::new("Depth", depth_points)
+                        Line::new("Simulated Depth", depth_points)
                             .color(egui::Color32::BLUE)
                             .width(2.0)
                     );
@@ -429,7 +564,97 @@ impl DivePlannerApp {
                             .width(1.0)
                     );
                 }
-            });
+            }
+            
+            // Always show FIT activity data if available and enabled
+            if self.show_fit_activity {
+                if let Some(ref fit_data) = self.fit_activity_data {
+                    // Raw FIT activity data
+                    let fit_points: PlotPoints = fit_data.timestamps
+                        .iter()
+                        .zip(fit_data.depths.iter())
+                        .map(|(&time, &depth)| {
+                            [time as f64, -depth as f64] // Negative depth for proper visualization
+                        })
+                        .collect();
+                    
+                    let raw_line_name = if self.smoothing_window > 1 {
+                        "FIT Activity (Raw)"
+                    } else {
+                        "FIT Activity"
+                    };
+                    
+                    plot_ui.line(
+                        Line::new(raw_line_name, fit_points)
+                            .color(egui::Color32::from_rgb(255, 165, 0)) // Orange
+                            .width(if self.smoothing_window > 1 { 1.5 } else { 2.5 })
+                    );
+                    
+                    // Smoothed FIT activity data (only show if smoothing is enabled)
+                    if self.smoothing_window > 1 {
+                        let smoothed_depths = self.smooth_depth_data(&fit_data.depths, self.smoothing_window);
+                        let smoothed_points: PlotPoints = fit_data.timestamps
+                            .iter()
+                            .zip(smoothed_depths.iter())
+                            .map(|(&time, &depth)| {
+                                [time as f64, -depth as f64] // Negative depth for proper visualization
+                            })
+                            .collect();
+                        
+                        plot_ui.line(
+                            Line::new(format!("FIT Activity (Smoothed, {}pt)", self.smoothing_window), smoothed_points)
+                                .color(egui::Color32::from_rgb(255, 69, 0)) // Red-orange, more prominent
+                                .width(3.0)
+                        );
+                    }
+                }
+            }
+            
+            // Show a placeholder message if no data is available
+            if self.simulation_results.is_none() && self.fit_activity_data.is_none() {
+                let placeholder_points: PlotPoints = vec![[0.0, 0.0], [30.0, 0.0]].into();
+                plot_ui.line(
+                    Line::new("No data - load FIT file or run simulation", placeholder_points)
+                        .color(egui::Color32::GRAY)
+                );
+            }
+        });
+
+        // Handle hover events to calculate and display velocity
+        if let Some(pointer_pos) = plot_response.response.hover_pos() {
+            let plot_pos = plot_response.transform.value_from_position(pointer_pos);
+            let hover_time = plot_pos.x;
+            let hover_depth = -plot_pos.y; // Convert back from negative visualization
+            
+            // Update hover position
+            self.hover_time = Some(hover_time);
+            self.hover_depth = Some(hover_depth as f32);
+            
+            // Calculate velocity from appropriate data source
+            let mut velocity = None;
+            
+            // Try simulation data first if visible
+            if self.show_depth && self.simulation_results.is_some() {
+                velocity = self.calculate_simulation_velocity_at_time(hover_time);
+            }
+            
+            // Try FIT data if simulation velocity not available and FIT data is visible
+            if velocity.is_none() && self.show_fit_activity && self.fit_activity_data.is_some() {
+                // Prefer smoothed data if available
+                velocity = self.calculate_fit_velocity_at_time(hover_time, self.smoothing_window > 1);
+                
+                // Fall back to raw FIT data if smoothed not available
+                if velocity.is_none() {
+                    velocity = self.calculate_fit_velocity_at_time(hover_time, false);
+                }
+            }
+            
+            self.current_velocity = velocity;
+        } else {
+            // Clear hover information when not hovering
+            self.current_velocity = None;
+            self.hover_time = None;
+            self.hover_depth = None;
         }
     }
     
@@ -599,18 +824,21 @@ impl DivePlannerApp {
         
         // Create dive parameters
         let mut dive_params = DiveParameters::new(self.gf_high, self.gf_low);
+        dive_params.descent_speed = self.descent_speed / 60.0; // Convert m/min to m/s
+        dive_params.ascent_speed = self.ascent_speed / 60.0;   // Convert m/min to m/s
         
-        let mut all_results = SimulationOutputs::new();
         let mut dive_text = String::new();
         dive_text.push_str(&format!("=== DIVE PLAN ===\n"));
         dive_text.push_str(&format!("GF Low/High: {:.0}%/{:.0}%\n", 
             self.gf_low * 100.0, self.gf_high * 100.0));
-        dive_text.push_str(&format!("Surface Pressure: {:.2} bar\n\n", self.surface_pressure));
+        dive_text.push_str(&format!("Surface Pressure: {:.2} bar\n", self.surface_pressure));
+        dive_text.push_str(&format!("Descent Speed: {:.1} m/min\n", self.descent_speed));
+        dive_text.push_str(&format!("Ascent Speed: {:.1} m/min\n\n", self.ascent_speed));
         
         let mut total_runtime = 0.0;
 
         // Create a continuous simulation for all dive steps
-        all_results = self.simulate_dive_steps(&mut dive_params, &mut tissues, temperature);
+        let all_results = self.simulate_dive_steps(&mut dive_params, &mut tissues, temperature);
         
         for (step_num, step) in self.dive_steps.iter().enumerate() {
             dive_text.push_str(&format!("Step {}: {}m for {:.1} minutes\n", 
@@ -844,6 +1072,8 @@ impl DivePlannerApp {
                         self.gf_low = plan.gf_low;
                         self.gf_high = plan.gf_high;
                         self.surface_pressure = plan.surface_pressure;
+                        self.descent_speed = plan.descent_speed;
+                        self.ascent_speed = plan.ascent_speed;
                         self.dive_steps = plan.dive_steps;
                         // Clear simulation results when loading a new plan
                         self.simulation_results = None;
@@ -865,6 +1095,8 @@ impl DivePlannerApp {
             gf_low: self.gf_low,
             gf_high: self.gf_high,
             surface_pressure: self.surface_pressure,
+            descent_speed: self.descent_speed,
+            ascent_speed: self.ascent_speed,
             dive_steps: self.dive_steps.clone(),
         };
         
@@ -878,6 +1110,191 @@ impl DivePlannerApp {
                 eprintln!("Error serializing dive plan: {}", e);
             }
         }
+    }
+    
+    fn load_fit_activity(&mut self, path: &Path) {
+        use std::fs::File;
+        use std::io::BufReader;
+        
+        match File::open(path) {
+            Ok(file) => {
+                let mut reader = BufReader::new(file);
+                match fitparser::from_reader(&mut reader) {
+                    Ok(fit_file) => {
+                        self.process_fit_file(fit_file);
+                    }
+                    Err(e) => {
+                        self.simulation_text = format!("Error parsing FIT file: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                self.simulation_text = format!("Error reading FIT file: {}", e);
+            }
+        }
+    }
+    
+    fn process_fit_file(&mut self, fit_file: Vec<fitparser::FitDataRecord>) {
+        let mut timestamps = Vec::new();
+        let mut depths = Vec::new();
+        let mut start_timestamp: Option<i64> = None;
+        
+        // Extract record messages which contain the depth and timestamp data
+        for data in fit_file.into_iter() {
+            let fields = data.fields();
+            let mut time_minutes: Option<f64> = None;
+            let mut depth_value: Option<f32> = None;
+            
+            // Extract timestamp and depth from fields
+            for field in fields {
+                match field.name() {
+                    "timestamp" => {
+                        if let fitparser::Value::Timestamp(ts) = field.value() {
+                            let timestamp_secs = ts.timestamp();
+                            if start_timestamp.is_none() {
+                                start_timestamp = Some(timestamp_secs);
+                                time_minutes = Some(0.0);
+                            } else if let Some(start) = start_timestamp {
+                                let duration_secs = timestamp_secs - start;
+                                time_minutes = Some(duration_secs as f64 / 60.0);
+                            }
+                        }
+                    }
+                    "depth" | "enhanced_depth" | "depth_m" | "water_depth" => {
+                        if let Some(depth) = self.extract_depth_value(field.value()) {
+                            depth_value = Some(depth);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            
+            // Add the data point if we have both time and depth
+            if let (Some(time), Some(depth)) = (time_minutes, depth_value) {
+                timestamps.push(time);
+                depths.push(depth);
+            }
+        }
+        
+        if !timestamps.is_empty() && !depths.is_empty() {
+            let data_points = timestamps.len();
+            self.fit_activity_data = Some(FitActivityData {
+                timestamps,
+                depths,
+            });
+            self.simulation_text = format!("Loaded FIT activity with {} data points", data_points);
+        } else {
+            self.simulation_text = "No valid depth data found in FIT file".to_string();
+        }
+    }
+    
+    fn extract_depth_value(&self, value: &fitparser::Value) -> Option<f32> {
+        match value {
+            fitparser::Value::Float32(v) => Some(*v),
+            fitparser::Value::Float64(v) => Some(*v as f32),
+            fitparser::Value::SInt8(v) => Some(*v as f32),
+            fitparser::Value::UInt8(v) => Some(*v as f32),
+            fitparser::Value::SInt16(v) => Some(*v as f32),
+            fitparser::Value::UInt16(v) => Some(*v as f32),
+            fitparser::Value::SInt32(v) => Some(*v as f32),
+            fitparser::Value::UInt32(v) => Some(*v as f32),
+            fitparser::Value::SInt64(v) => Some(*v as f32),
+            fitparser::Value::UInt64(v) => Some(*v as f32),
+            _ => None,
+        }
+    }
+    
+    fn smooth_depth_data(&self, depths: &[f32], window_size: usize) -> Vec<f32> {
+        if depths.is_empty() || window_size <= 1 {
+            return depths.to_vec();
+        }
+        
+        let mut smoothed = Vec::with_capacity(depths.len());
+        let half_window = window_size / 2;
+        
+        for i in 0..depths.len() {
+            // Preserve the exact start and end values to match the raw curve
+            if i == 0 || i == depths.len() - 1 {
+                smoothed.push(depths[i]);
+            } else {
+                let start = if i >= half_window { i - half_window } else { 0 };
+                let end = (i + half_window + 1).min(depths.len());
+                
+                let sum: f32 = depths[start..end].iter().sum();
+                let count = end - start;
+                let average = sum / count as f32;
+                
+                smoothed.push(average);
+            }
+        }
+        
+        smoothed
+    }
+
+    fn calculate_velocity_at_time(&self, time_minutes: f64, depths: &[f32], timestamps: &[f64]) -> Option<f32> {
+        if depths.len() < 2 || timestamps.len() != depths.len() {
+            return None;
+        }
+
+        // Find the closest data points
+        let mut closest_idx = 0;
+        let mut min_diff = f64::INFINITY;
+        
+        for (i, &timestamp) in timestamps.iter().enumerate() {
+            let diff = (timestamp - time_minutes).abs();
+            if diff < min_diff {
+                min_diff = diff;
+                closest_idx = i;
+            }
+        }
+
+        // Calculate velocity using central difference when possible
+        let velocity = if closest_idx == 0 {
+            // Forward difference at the start
+            if depths.len() > 1 {
+                let dt = timestamps[1] - timestamps[0];
+                let dd = depths[1] - depths[0];
+                if dt > 0.0 { Some(dd / dt as f32) } else { None }
+            } else {
+                None
+            }
+        } else if closest_idx == depths.len() - 1 {
+            // Backward difference at the end
+            let dt = timestamps[closest_idx] - timestamps[closest_idx - 1];
+            let dd = depths[closest_idx] - depths[closest_idx - 1];
+            if dt > 0.0 { Some(dd / dt as f32) } else { None }
+        } else {
+            // Central difference in the middle
+            let dt = timestamps[closest_idx + 1] - timestamps[closest_idx - 1];
+            let dd = depths[closest_idx + 1] - depths[closest_idx - 1];
+            if dt > 0.0 { Some(dd / dt as f32) } else { None }
+        };
+
+        velocity
+    }
+
+    fn calculate_simulation_velocity_at_time(&self, time_minutes: f64) -> Option<f32> {
+        if let Some(ref results) = self.simulation_results {
+            if !results.depths.is_empty() {
+                let timestamps: Vec<f64> = (0..results.depths.len())
+                    .map(|i| i as f64 * 10.0 / 60.0) // 10-second intervals converted to minutes
+                    .collect();
+                return self.calculate_velocity_at_time(time_minutes, &results.depths, &timestamps);
+            }
+        }
+        None
+    }
+
+    fn calculate_fit_velocity_at_time(&self, time_minutes: f64, use_smoothed: bool) -> Option<f32> {
+        if let Some(ref fit_data) = self.fit_activity_data {
+            let depths = if use_smoothed && self.smoothing_window > 1 {
+                self.smooth_depth_data(&fit_data.depths, self.smoothing_window)
+            } else {
+                fit_data.depths.clone()
+            };
+            return self.calculate_velocity_at_time(time_minutes, &depths, &fit_data.timestamps);
+        }
+        None
     }
 }
 

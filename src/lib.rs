@@ -35,9 +35,9 @@ pub struct DiveParameters {
 impl DiveParameters {
     pub fn new(gf_high: f32, gf_low: f32) -> Self {
         DiveParameters {
-            descent_speed: 0.333333333,
-            ascent_speed: 0.1666667,
-            safety_stop_ascent_speed: 0.083,
+            descent_speed: 20.0 / 60.0,  // 20 m/min -> 0.333... m/s
+            ascent_speed: 10.0 / 60.0,   // 10 m/min -> 0.166... m/s
+            safety_stop_ascent_speed: 5.0 / 60.0,  // 5 m/min -> 0.083... m/s
             safety_stop_duration: 3.0,
             safety_stop_depth: 5.0,
             gf_low,
@@ -50,9 +50,9 @@ impl DiveParameters {
 impl Default for DiveParameters {
     fn default() -> Self {
         DiveParameters {
-            descent_speed: 0.33,
-            ascent_speed: 0.17,
-            safety_stop_ascent_speed: 0.083,
+            descent_speed: 20.0 / 60.0,  // 20 m/min -> 0.333... m/s
+            ascent_speed: 10.0 / 60.0,   // 10 m/min -> 0.166... m/s
+            safety_stop_ascent_speed: 5.0 / 60.0,  // 5 m/min -> 0.083... m/s
             safety_stop_duration: 3.0,
             safety_stop_depth: 5.0,
             gf_low: 1.0,
@@ -70,8 +70,7 @@ pub const FHE: f32 = 0.0;
 //     He,
 // }
 
-use crate::ceiling::{max_ceiling, binary_ceiling};
-use crate::ndl::binary_ndl;
+use crate::ceiling::max_ceiling;
 use crate::m_value::calculate_m_values;
 use crate::tissue::{calculate_tissue, Tissue};
 

@@ -240,18 +240,10 @@ pub fn simulate_with_ascent_from_depth(
                     // We need to make a deco stop
                     let deco_depth = calculate_deco_stop_depth(current_ceiling);
                     current_deco_depth = deco_depth;
-                    at_deco_stop = true;
-                    deco_stop_time = accumulated_short_stop_time; // Start with accumulated time from skipped stops
-                    accumulated_short_stop_time = 0.0; // Reset accumulator
                     
                     #[cfg(feature = "std")]
-                    if deco_stop_time > 0.0 {
-                        println!("Deco stop required at {}m (ceiling: {}m, controlling tissue: {}) - including {:.1}s from skipped stops", 
-                                deco_depth, current_ceiling, _controlling_tissue, deco_stop_time);
-                    } else {
-                        println!("Deco stop required at {}m (ceiling: {}m, controlling tissue: {})", 
-                                deco_depth, current_ceiling, _controlling_tissue);
-                    }
+                    println!("Deco stop required at {}m (ceiling: {}m, controlling tissue: {})", 
+                            deco_depth, current_ceiling, _controlling_tissue);
                     
                     // Ascend to deco stop depth if we're deeper
                     if depth > deco_depth {
@@ -262,6 +254,10 @@ pub fn simulate_with_ascent_from_depth(
                         depth -= params.ascent_speed * step;
                         if depth <= deco_depth {
                             depth = deco_depth;
+                            // Only now do we officially start the deco stop
+                            at_deco_stop = true;
+                            deco_stop_time = accumulated_short_stop_time; // Start with accumulated time from skipped stops
+                            accumulated_short_stop_time = 0.0; // Reset accumulator
                         }
                         amb_pressure = depth / 10.0 + 1.0;
                         
@@ -276,7 +272,15 @@ pub fn simulate_with_ascent_from_depth(
                             record_output(&mut outputs, depth, amb_pressure, tissues);
                             output_accumulator -= interval_in_seconds;
                         }
+                        
+                        // Continue ascending to deco stop
                         continue;
+                    } else {
+                        // We're already at or above the deco stop depth
+                        depth = deco_depth;
+                        at_deco_stop = true;
+                        deco_stop_time = accumulated_short_stop_time;
+                        accumulated_short_stop_time = 0.0;
                     }
                 } else if depth > 0.0 {
                     // No deco stop needed, continue ascending
