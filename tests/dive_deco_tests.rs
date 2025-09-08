@@ -4,7 +4,7 @@
 fn test_dive_deco() {
     use dive_deco::{BuhlmannConfig, BuhlmannModel, DecoModel, DecoStage, Depth, Gas, Time};
 
-    let mut config = BuhlmannConfig::new().with_gradient_factors(80, 80);
+    let config = BuhlmannConfig::new().with_gradient_factors(80, 80);
     let mut model = BuhlmannModel::default();
     model.update_config(config);
 
@@ -36,7 +36,7 @@ fn test_dive_deco() {
              println!("Depth (m) | Duration (secs) | Duration (min) | Start Time (min) | End Time (min)");
             println!("----------|----------------|----------------|------------------|----------------");
             runtime.deco_stages.iter().for_each(|stage: &DecoStage| {
-                if(stage.stage_type == dive_deco::DecoStageType::DecoStop) {
+                if stage.stage_type == dive_deco::DecoStageType::DecoStop {
                     println!("   {:4.1}   |     {:6.1}     |      {:6.1}      |      {:6.1}      |      {:6.1}", stage.start_depth.as_meters(), stage.duration.as_seconds(), stage.duration.as_minutes(), current_time / 60.0, current_time / 60.0 + stage.duration.as_minutes());
                     deco_time += stage.duration.as_minutes();
                 }

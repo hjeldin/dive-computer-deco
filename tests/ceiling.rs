@@ -242,8 +242,7 @@ fn test_known_ceiling_value() {
 #[test]
 fn test_ceiling_against_dive_deco() {
     use dive_deco::{
-        BuehlmannConfig, BuehlmannModel, CeilingType, DecoModel, DecoRuntime, DecoStage,
-        DecoStageType, Depth, Gas, Time,
+        BuehlmannModel, DecoModel, Depth, Gas, Time,
     };
 
     use dive_computer_deco::{simulate::simulate, water_vapor_pressure, FHE, FN2};
@@ -322,7 +321,7 @@ fn test_ceiling_against_dive_deco() {
 #[test]
 fn test_ceiling_generalized_dive_deco() {
     use dive_deco::{BuehlmannModel, DecoModel, Depth, Gas, Time};
-    use rand::Rng;
+    
     use std::vec;
     use std::vec::Vec;
 
@@ -414,7 +413,7 @@ fn test_ceiling_generalized_dive_deco() {
 #[test]
 fn test_ceiling_generalized_dive_deco_using_minutes_time_increment() {
     use dive_deco::{BuehlmannModel, DecoModel, Depth, Gas, Time};
-    use rand::Rng;
+    
     use std::vec;
     use std::vec::Vec;
 

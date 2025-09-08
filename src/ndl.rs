@@ -11,7 +11,7 @@ pub fn ndl(
 ) -> f32 {
     // while ceiling is 0 keep looping
     let mut bottom_time = 0.0;
-    let mut max_ceiling: u32 = 0;
+    let mut max_ceiling: u32;
     const MAX_ITERATIONS: u32 = 10000; // Prevent infinite loops with extreme GF values
     let mut iterations = 0;
 
@@ -45,7 +45,7 @@ pub fn binary_ndl(
     temperature: f32,
 ) -> f32 {
     let mut bottom_time = 0.0;
-    let mut max_ceiling: u32 = 0;
+    let mut max_ceiling: u32;
     const MAX_ITERATIONS: u32 = 10000; // Prevent infinite loops with extreme GF values
     let mut iterations = 0;
     loop {

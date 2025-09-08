@@ -86,7 +86,7 @@ pub fn simulate_with_ascent_from_depth(
     
     let mut outputs = SimulationOutputs::new();
     let mut depth = starting_depth;
-    let mut amb_pressure = depth / 10.0 + 1.0; // Convert depth to absolute pressure
+    let mut amb_pressure: f32; // Convert depth to absolute pressure
     let mut dive_time = 0.0;
     let mut descending = if starting_depth < target_depth { true } else { false };
     let mut bottom = if starting_depth == target_depth { true } else { false };

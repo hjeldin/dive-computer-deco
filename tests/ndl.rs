@@ -2,8 +2,7 @@ use dive_computer_deco::ndl::binary_ndl;
 use dive_computer_deco::ndl::ndl;
 use dive_computer_deco::simulate::simulate;
 use dive_computer_deco::{water_vapor_pressure, DiveParameters, FHE, FN2};
-use dive_computer_deco::tissue::{Tissue, calculate_tissue};
-use dive_computer_deco::ceiling::{ceiling, binary_ceiling};
+use dive_computer_deco::tissue::Tissue;
 // Binary NDL tests
 #[test]
 fn test_binary_ndl_vs_regular() {
