@@ -40,6 +40,7 @@ struct DivePlan {
 enum PlotTab {
     DiveProfile,
     TissuePressure,
+    TissueHeatmap,
 }
 
 #[derive(Debug, Clone)]
@@ -49,12 +50,12 @@ struct FitActivityData {
 }
 
 impl FitActivityData {
-    fn new() -> Self {
-        Self {
-            timestamps: Vec::new(),
-            depths: Vec::new(),
-        }
-    }
+    // fn new() -> Self {
+    //     Self {
+    //         timestamps: Vec::new(),
+    //         depths: Vec::new(),
+    //     }
+    // }
 }
 
 struct DivePlannerApp {
@@ -459,6 +460,7 @@ impl DivePlannerApp {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, PlotTab::DiveProfile, "🌊 Dive Profile");
                 ui.selectable_value(&mut self.active_tab, PlotTab::TissuePressure, "🧬 Tissue Pressure");
+                ui.selectable_value(&mut self.active_tab, PlotTab::TissueHeatmap, "🔥 Tissue Heatmap");
             });
         });
         
@@ -468,6 +470,7 @@ impl DivePlannerApp {
         match self.active_tab {
             PlotTab::DiveProfile => self.dive_profile_plot(ui),
             PlotTab::TissuePressure => self.secondary_plot(ui),
+            PlotTab::TissueHeatmap => self.tissue_heatmap_plot(ui),
         }
     }
     
@@ -781,6 +784,281 @@ impl DivePlannerApp {
                 );
             }
         });
+    }
+    
+    fn tissue_heatmap_plot(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Tissue Loading Heatmap (% of M-Value)");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.colored_label(egui::Color32::GRAY, "🔥 Hot = High Loading");
+            });
+        });
+        
+        ui.add_space(8.0);
+        
+        // Calculate available height for the plot
+        let available_height = ui.available_height() - 40.0;
+        let plot_height = available_height.max(400.0); // Minimum height for heatmap
+        
+        if let Some(ref results) = self.simulation_results {
+            if !results.tissues_per_interval.is_empty() {
+                self.render_tissue_heatmap(ui, results, plot_height);
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.colored_label(egui::Color32::GRAY, "No tissue data available - run simulation");
+                });
+            }
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.colored_label(egui::Color32::GRAY, "No simulation data - click 'Simulate Dive' to generate heatmap");
+            });
+        }
+    }
+    
+    fn render_tissue_heatmap(&self, ui: &mut egui::Ui, results: &SimulationOutputs, plot_height: f32) {
+        use egui::*;
+        
+        // Calculate time points (x-axis)
+        let time_points: Vec<f64> = (0..results.tissues_per_interval.len())
+            .map(|i| i as f64 * 10.0 / 60.0) // Convert 10-second intervals to minutes
+            .collect();
+        
+        if time_points.is_empty() {
+            return;
+        }
+        
+        let _max_time = time_points.last().unwrap_or(&0.0);
+        let num_tissues = 16;
+        
+        // Calculate tissue loading percentages for each time point
+        let mut heatmap_data: Vec<Vec<f32>> = Vec::new();
+        
+        for tissues in &results.tissues_per_interval {
+            let mut tissue_loadings = Vec::new();
+            for tissue_idx in 0..num_tissues {
+                let m_value = calculate_m_values(self.surface_pressure, tissue_idx);
+                let loading_percent = if m_value > 0.0 {
+                    (tissues[tissue_idx].load_n2 / m_value * 100.0).min(100.0).max(0.0)
+                } else {
+                    0.0
+                };
+                tissue_loadings.push(loading_percent);
+            }
+            heatmap_data.push(tissue_loadings);
+        }
+        
+        // Create a custom widget for the heatmap
+        let heatmap_rect = ui.allocate_response(
+            Vec2::new(ui.available_width(), plot_height),
+            Sense::hover()
+        );
+        
+        if heatmap_rect.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+        }
+        
+        let painter = ui.painter_at(heatmap_rect.rect);
+        
+        // Draw the heatmap
+        let rect = heatmap_rect.rect;
+        let cell_width = rect.width() / time_points.len() as f32;
+        let cell_height = rect.height() / num_tissues as f32;
+        
+        // Draw heatmap cells
+        for (time_idx, tissue_loadings) in heatmap_data.iter().enumerate() {
+            for (tissue_idx, &loading) in tissue_loadings.iter().enumerate() {
+                let x = rect.min.x + time_idx as f32 * cell_width;
+                let y = rect.min.y + tissue_idx as f32 * cell_height;
+                
+                let cell_rect = Rect::from_min_size(
+                    Pos2::new(x, y),
+                    Vec2::new(cell_width, cell_height)
+                );
+                
+                // Color mapping: blue (low) -> green -> yellow -> red (high)
+                let color = self.loading_to_color(loading);
+                painter.rect_filled(cell_rect, 0.0, color);
+            }
+        }
+        
+        // Draw grid lines
+        painter.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::GRAY), egui::StrokeKind::Middle);
+        
+        // Draw tissue compartment labels (y-axis)
+        for tissue_idx in 0..num_tissues {
+            let y = rect.min.y + (tissue_idx as f32 + 0.5) * cell_height;
+            let label_pos = Pos2::new(rect.min.x - 5.0, y);
+            
+            painter.text(
+                label_pos,
+                Align2::RIGHT_CENTER,
+                format!("T{}", tissue_idx + 1),
+                FontId::proportional(10.0),
+                Color32::WHITE
+            );
+        }
+        
+        // Draw time labels (x-axis) - show every 10th point to avoid crowding
+        let time_step = (time_points.len() / 10).max(1);
+        for (i, &time) in time_points.iter().enumerate() {
+            if i % time_step == 0 {
+                let x = rect.min.x + i as f32 * cell_width + cell_width * 0.5;
+                let label_pos = Pos2::new(x, rect.max.y + 15.0);
+                
+                painter.text(
+                    label_pos,
+                    Align2::CENTER_TOP,
+                    format!("{:.0}", time),
+                    FontId::proportional(10.0),
+                    Color32::WHITE
+                );
+            }
+        }
+        
+        // Add axis labels
+        painter.text(
+            Pos2::new(rect.center().x, rect.max.y + 35.0),
+            Align2::CENTER_TOP,
+            "Time (minutes)",
+            FontId::proportional(12.0),
+            Color32::WHITE
+        );
+        
+        // Rotate tissue label for y-axis
+        painter.text(
+            Pos2::new(rect.min.x - 40.0, rect.center().y),
+            Align2::CENTER_CENTER,
+            "Tissue Compartment",
+            FontId::proportional(12.0),
+            Color32::WHITE
+        );
+        
+        // Draw color scale legend
+        self.draw_color_legend(ui, &painter, rect);
+        
+        // Handle hover to show values
+        if let Some(hover_pos) = heatmap_rect.hover_pos() {
+            let relative_pos = hover_pos - rect.min;
+            let time_idx = ((relative_pos.x / cell_width) as usize).min(time_points.len() - 1);
+            let tissue_idx = ((relative_pos.y / cell_height) as usize).min(num_tissues - 1);
+            
+            if time_idx < heatmap_data.len() && tissue_idx < heatmap_data[time_idx].len() {
+                let loading = heatmap_data[time_idx][tissue_idx];
+                let time = time_points[time_idx];
+                
+                // Show tooltip
+                let tooltip_text = format!(
+                    "Tissue {}: {:.1}%\nTime: {:.1} min",
+                    tissue_idx + 1, loading, time
+                );
+                
+                heatmap_rect.on_hover_text(tooltip_text);
+            }
+        }
+    }
+    
+    fn loading_to_color(&self, loading_percent: f32) -> egui::Color32 {
+        // Clamp loading between 0 and 100
+        let loading = loading_percent.clamp(0.0, 100.0);
+        
+        // Create a color gradient from blue (0%) to red (100%)
+        if loading < 25.0 {
+            // Blue to cyan (0-25%)
+            let t = loading / 25.0;
+            egui::Color32::from_rgb(
+                (0.0 * (1.0 - t) + 0.0 * t) as u8,
+                (0.0 * (1.0 - t) + 255.0 * t) as u8,
+                255
+            )
+        } else if loading < 50.0 {
+            // Cyan to green (25-50%)
+            let t = (loading - 25.0) / 25.0;
+            egui::Color32::from_rgb(
+                0,
+                255,
+                (255.0 * (1.0 - t) + 0.0 * t) as u8
+            )
+        } else if loading < 75.0 {
+            // Green to yellow (50-75%)
+            let t = (loading - 50.0) / 25.0;
+            egui::Color32::from_rgb(
+                (0.0 * (1.0 - t) + 255.0 * t) as u8,
+                255,
+                0
+            )
+        } else {
+            // Yellow to red (75-100%)
+            let t = (loading - 75.0) / 25.0;
+            egui::Color32::from_rgb(
+                255,
+                (255.0 * (1.0 - t) + 0.0 * t) as u8,
+                0
+            )
+        }
+    }
+    
+    fn draw_color_legend(&self, _ui: &mut egui::Ui, painter: &egui::Painter, heatmap_rect: egui::Rect) {
+        // Draw color scale legend on the right side
+        let legend_width = 20.0;
+        let legend_height = 200.0;
+        let legend_x = heatmap_rect.max.x + 20.0;
+        let legend_y = heatmap_rect.min.y + (heatmap_rect.height() - legend_height) * 0.5;
+        
+        let legend_rect = egui::Rect::from_min_size(
+            egui::Pos2::new(legend_x, legend_y),
+            egui::Vec2::new(legend_width, legend_height)
+        );
+        
+        // Draw gradient bars
+        let num_segments = 100;
+        let segment_height = legend_height / num_segments as f32;
+        
+        for i in 0..num_segments {
+            let loading = (i as f32 / num_segments as f32) * 100.0;
+            let color = self.loading_to_color(loading);
+            
+            let y = legend_rect.max.y - (i as f32 + 1.0) * segment_height;
+            let segment_rect = egui::Rect::from_min_size(
+                egui::Pos2::new(legend_rect.min.x, y),
+                egui::Vec2::new(legend_width, segment_height)
+            );
+            
+            painter.rect_filled(segment_rect, 0.0, color);
+        }
+        
+        // Draw legend border
+        painter.rect_stroke(legend_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::WHITE), egui::StrokeKind::Middle);
+
+        // Draw legend labels
+        let legend_labels = [
+            (0.0, "0%"),
+            (25.0, "25%"),
+            (50.0, "50%"),
+            (75.0, "75%"),
+            (100.0, "100%"),
+        ];
+        
+        for (percent, label) in legend_labels.iter() {
+            let y = legend_rect.max.y - (percent / 100.0) * legend_height;
+            let label_pos = egui::Pos2::new(legend_rect.max.x + 5.0, y);
+            
+            painter.text(
+                label_pos,
+                egui::Align2::LEFT_CENTER,
+                *label,
+                egui::FontId::proportional(10.0),
+                egui::Color32::WHITE
+            );
+        }
+        
+        // Legend title
+        painter.text(
+            egui::Pos2::new(legend_rect.center().x, legend_rect.min.y - 15.0),
+            egui::Align2::CENTER_BOTTOM,
+            "% M-Value",
+            egui::FontId::proportional(11.0),
+            egui::Color32::WHITE
+        );
     }
     
     fn get_responsible_tissues(&self, tissues: &[Tissue; 16]) -> Vec<(usize, u32, f32)> {

@@ -75,31 +75,6 @@ fn validate_gradient_factors(gf_high: f32, gf_low: f32) -> (f32, f32) {
     (validated_gf_high, validated_gf_low)
 }
 
-fn get_depths_input() -> Vec<f32> {
-    loop {
-        print!("Enter dive depths in meters (comma-separated, e.g., 18,30,40): ");
-        io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-
-        let input = input.trim();
-        if input.is_empty() {
-            return vec![18.0, 30.0, 40.0]; // default values
-        }
-
-        let depths: Result<Vec<f32>, _> = input
-            .split(',')
-            .map(|s| s.trim().parse::<f32>())
-            .collect();
-
-        match depths {
-            Ok(depths) if !depths.is_empty() => return depths,
-            _ => println!("Invalid input. Please enter comma-separated numbers (e.g., 18,30,40)."),
-        }
-    }
-}
-
 fn main() {
     println!("=== Dive-Deco Library Decompression Planner ===");
     println!("Using external dive-deco crate as reference implementation");
@@ -140,60 +115,6 @@ fn main() {
 
     // Demonstrate a dive simulation
     demonstrate_dive_simulation(target_depth, bottom_time_minutes, gf_high, gf_low);
-}
-
-fn plan_dive(depth: f32, _gf_high: f32, _gf_low: f32) {
-    println!("=== Planning dive to {:.0}m ===", depth);
-
-    // Create a Bühlmann model with gradient factors
-    let model = BuehlmannModel::default();
-    // Note: dive-deco library handles gradient factors differently
-    // We'll use the default model configuration and interpret results accordingly
-    
-    // Standard air composition (21% O2, 0% He, 79% N2)
-    let air = Gas::new(0.21, 0.0);
-
-    // Calculate No Decompression Limit (NDL) at this depth
-    // For dive-deco, we get NDL by checking the model state
-    let ndl = model.ndl();
-    println!("No Decompression Limit: {:.1} minutes", ndl.as_minutes());
-
-    // Check current ceiling (should be 0 at surface)
-    let ceiling = model.ceiling();
-    println!("Current ceiling: {:.1}m", ceiling.as_meters());
-
-    // Simulate different bottom times relative to NDL
-    let ndl_minutes = ndl.as_minutes() as f32;
-    let bottom_times = [ndl_minutes * 0.5, ndl_minutes * 0.8, ndl_minutes * 1.2];
-
-    for &bottom_time in &bottom_times {
-        println!("\n  Bottom time: {:.1} minutes", bottom_time);
-
-        // Create a fresh model for this simulation
-        let mut sim_model = BuehlmannModel::default();
-        
-        println!("    Simulating dive...");
-        
-        // Record the dive in the model
-        sim_model.record(
-            Depth::from_meters(depth),
-            Time::from_minutes(bottom_time),
-            &air
-        );
-
-        // Check ceiling after the dive
-        let post_dive_ceiling = sim_model.ceiling();
-
-        if post_dive_ceiling.as_meters() == 0.0 {
-            println!("    Result: No decompression required");
-        } else {
-            println!("    Result: Decompression required - ceiling at {:.1}m", 
-                    post_dive_ceiling.as_meters());
-        }
-
-        // Show model state information
-        println!("    Model state: ceiling at {:.1}m", post_dive_ceiling.as_meters());
-    }
 }
 
 fn demonstrate_dive_simulation(target_depth: f32, bottom_time_minutes: f32, _gf_high: f32, _gf_low: f32) {

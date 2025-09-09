@@ -12,9 +12,8 @@ use dive_computer_deco::{
     DiveParameters, 
     tissue::Tissue, 
     default_tissue_load,
-    ndl::ndl,
     ceiling::max_ceiling,
-    simulate::{simulate, simulate_with_ascent},
+    simulate::simulate_with_ascent,
 };
 use std::io::{self, Write};
 
@@ -72,31 +71,6 @@ fn validate_gradient_factors(gf_high: f32, gf_low: f32) -> (f32, f32) {
     (validated_gf_high, validated_gf_low)
 }
 
-fn get_depths_input() -> Vec<f32> {
-    loop {
-        print!("Enter dive depths in meters (comma-separated, e.g., 18,30,40): ");
-        io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-
-        let input = input.trim();
-        if input.is_empty() {
-            return vec![18.0, 30.0, 40.0]; // default values
-        }
-
-        let depths: Result<Vec<f32>, _> = input
-            .split(',')
-            .map(|s| s.trim().parse::<f32>())
-            .collect();
-
-        match depths {
-            Ok(depths) if !depths.is_empty() => return depths,
-            _ => println!("Invalid input. Please enter comma-separated numbers (e.g., 18,30,40)."),
-        }
-    }
-}
-
 fn main() {
     println!("=== Dive Computer Decompression Planner ===\n");
 
@@ -142,7 +116,7 @@ fn main() {
     demonstrate_dive_simulation(&mut dive_params, &mut tissues, temperature, surface_pressure, target_depth, bottom_time_minutes, interval_seconds);
 }
 
-fn initialize_tissues(surface_pressure: f32, temperature: f32) -> [Tissue; 16] {
+fn initialize_tissues(_surface_pressure: f32, temperature: f32) -> [Tissue; 16] {
     let mut tissues = [Tissue::default(); 16];
     let initial_n2_load = default_tissue_load(temperature);
 
@@ -153,58 +127,6 @@ fn initialize_tissues(surface_pressure: f32, temperature: f32) -> [Tissue; 16] {
     }
 
     tissues
-}
-
-fn plan_dive(depth: f32, dive_params: &DiveParameters, tissues: &mut [Tissue; 16], temperature: f32, surface_pressure: f32) {
-    let pressure_at_depth = depth / 10.0 + 1.0; // Convert depth to pressure (bar)
-
-    println!("=== Planning dive to {:.0}m ({:.1} bar) ===", depth, pressure_at_depth);
-
-    // Calculate No Decompression Limit (NDL)
-    let ndl_minutes = ndl(*dive_params, tissues, pressure_at_depth, temperature);
-    println!("No Decompression Limit: {:.1} minutes", ndl_minutes);
-
-    // Check current ceiling (should be 0 at surface)
-    let (ceiling_depth, controlling_tissue) = max_ceiling(*dive_params, tissues);
-    println!("Current ceiling: {}m (controlled by tissue {})", ceiling_depth, controlling_tissue);
-
-    // Simulate different bottom times
-    let bottom_times = [ndl_minutes * 0.5, ndl_minutes * 0.8, ndl_minutes * 1.2];
-
-    for &bottom_time in &bottom_times {
-        println!("\n  Bottom time: {:.1} minutes", bottom_time);
-
-        // Create a copy of tissues for simulation
-        let mut sim_tissues = *tissues;
-
-        println!("    Simulating dive...");
-        
-        // Simulate the dive
-        let _outputs = simulate(
-            &mut dive_params.clone(),
-            &mut sim_tissues,
-            surface_pressure,
-            depth,
-            temperature,
-            60.0, // 60 second intervals
-            bottom_time * 60.0, // convert minutes to seconds
-        );
-
-        // Check ceiling after the dive
-        let (post_dive_ceiling, controlling_tissue) = max_ceiling(*dive_params, &sim_tissues);
-
-        if post_dive_ceiling == 0 {
-            println!("    Result: No decompression required");
-        } else {
-            println!("    Result: Decompression required - ceiling at {}m (tissue {})", 
-                    post_dive_ceiling, controlling_tissue);
-        }
-
-        // Show tissue loading for the most loaded tissue
-        let most_loaded_tissue = &sim_tissues[controlling_tissue];
-        println!("    Controlling tissue N2: {:.3} bar, He: {:.3} bar", 
-                most_loaded_tissue.load_n2, most_loaded_tissue.load_he);
-    }
 }
 
 fn demonstrate_dive_simulation(dive_params: &mut DiveParameters, tissues: &mut [Tissue; 16], temperature: f32, surface_pressure: f32, target_depth: f32, bottom_time_minutes: f32, interval_seconds: f32) {

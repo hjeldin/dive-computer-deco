@@ -6,7 +6,7 @@ fn test_dive_deco() {
 
     let config = BuhlmannConfig::new().with_gradient_factors(80, 80);
     let mut model = BuhlmannModel::default();
-    model.update_config(config);
+    let _ = model.update_config(config);
 
     // bottom gas
     let air = Gas::air();
