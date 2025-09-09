@@ -217,19 +217,16 @@ impl DivePlannerApp {
                 ui.end_row();
             });
         
-        // Ensure GF Low <= GF High
-        if self.gf_low > self.gf_high {
-            self.gf_low = self.gf_high;
-        }
-
         ui.add_space(8.0);
         ui.separator();
-        ui.add_space(4.0);
+        ui.add_space(4.0);       
         ui.horizontal(|ui| {
             ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "📊 Current GF:");
-            ui.colored_label(egui::Color32::LIGHT_GRAY, 
+            let color = egui::Color32::LIGHT_GRAY;
+            ui.colored_label(color, 
                 format!("{:.0}%/{:.0}%", self.gf_low * 100.0, self.gf_high * 100.0));
         });
+        
     }
     
     fn dive_profile_panel(&mut self, ui: &mut egui::Ui) {
@@ -312,9 +309,21 @@ impl DivePlannerApp {
         ui.heading("🚀 Simulation");
         ui.add_space(8.0);
         
+        // Check if simulation can be run
+        let gf_invalid = self.gf_low > self.gf_high;
+        let can_simulate = !gf_invalid && !self.dive_steps.is_empty();
+        
         // Large simulation button
+        let button_text = if gf_invalid {
+            "⚠️ Fix GF Values First"
+        } else if self.dive_steps.is_empty() {
+            "📝 Add Dive Steps First"
+        } else {
+            "🏊 Simulate Dive"
+        };
+        
         let button_response = ui.add_sized([ui.available_width(), 32.0], 
-            egui::Button::new("🏊 Simulate Dive"));
+            egui::Button::new(button_text));
         
         if button_response.clicked() {
             self.run_simulation();
@@ -538,7 +547,7 @@ impl DivePlannerApp {
                         .enumerate()
                         .map(|(i, tissues)| {
                             let time_minutes = i as f64 * 10.0 / 60.0;
-                            let (ceiling, _) = max_ceiling_with_gf(self.gf_high, tissues);
+                            let (ceiling, _) = max_ceiling_with_gf(self.gf_low, self.gf_high, tissues);
                             [time_minutes, -(ceiling as f64)] // Negative for proper visualization
                         })
                         .collect();
@@ -833,34 +842,61 @@ impl DivePlannerApp {
         // Calculate tissue loading percentages for each time point
         let mut heatmap_data: Vec<Vec<f32>> = Vec::new();
         
-        for tissues in &results.tissues_per_interval {
-            let mut tissue_loadings = Vec::new();
-            for tissue_idx in 0..num_tissues {
-                let m_value = calculate_m_values(self.surface_pressure, tissue_idx);
-                let loading_percent = if m_value > 0.0 {
-                    (tissues[tissue_idx].load_n2 / m_value * 100.0).min(100.0).max(0.0)
-                } else {
-                    0.0
-                };
-                tissue_loadings.push(loading_percent);
-            }
-            heatmap_data.push(tissue_loadings);
-        }
+        // for (time_idx, tissues) in results.tissues_per_interval.iter().enumerate() {
+        //     let mut tissue_loadings = Vec::new();
+            
+        //     // Get current depth for this time point to calculate proper gradient factor
+        //     let current_depth = results.depths.get(time_idx).unwrap_or(&0.0);
+        //     let ambient_pressure = self.surface_pressure + (current_depth / 10.0);
+            
+        //     for tissue_idx in 0..num_tissues {
+        //         let tissue = &tissues[tissue_idx];
+        //         let m_value = calculate_m_values(ambient_pressure, tissue_idx);
+        //         let tissue_pressure = tissue.load_n2 + tissue.load_he;
+                
+        //         // Calculate the first stop pressure for gradient factor interpolation
+        //         let first_stop_pressure = dive_computer_deco::ceiling::first_stop_pressure(tissues, self.surface_pressure);
+                
+        //         // Interpolate gradient factor for current conditions
+        //         let current_gf = if (first_stop_pressure - self.surface_pressure).abs() < 1e-6 {
+        //             self.gf_high // At surface or no decompression needed
+        //         } else {
+        //             let fraction = (tissue_pressure - self.surface_pressure) 
+        //                          / (first_stop_pressure - self.surface_pressure);
+        //             let fraction = fraction.clamp(0.0, 1.0);
+        //             self.gf_low + (self.gf_high - self.gf_low) * fraction
+        //         };
+                
+        //         // Calculate loading percentage using gradient factor
+        //         let loading_percent = if m_value > 0.0 {
+        //             // Calculate the allowed pressure at current depth with current GF
+        //             let allowed_overpressure = current_gf * (m_value - ambient_pressure);
+        //             let allowed_pressure = ambient_pressure + allowed_overpressure;
+                    
+        //             // Calculate percentage of allowed pressure
+        //             (tissue_pressure / allowed_pressure * 100.0).min(100.0).max(0.0)
+        //         } else {
+        //             0.0
+        //         };
+        //         tissue_loadings.push(loading_percent);
+        //     }
+        //     heatmap_data.push(tissue_loadings);
+        // }
         
         // Create a custom widget for the heatmap
-        let heatmap_rect = ui.allocate_response(
+        let heatmap_response = ui.allocate_response(
             Vec2::new(ui.available_width(), plot_height),
             Sense::hover()
         );
         
-        if heatmap_rect.hovered() {
+        if heatmap_response.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
         }
         
-        let painter = ui.painter_at(heatmap_rect.rect);
+        let painter = ui.painter_at(heatmap_response.rect);
         
         // Draw the heatmap
-        let rect = heatmap_rect.rect;
+        let rect = heatmap_response.rect;
         let cell_width = rect.width() / time_points.len() as f32;
         let cell_height = rect.height() / num_tissues as f32;
         
@@ -936,23 +972,49 @@ impl DivePlannerApp {
         // Draw color scale legend
         self.draw_color_legend(ui, &painter, rect);
         
-        // Handle hover to show values
-        if let Some(hover_pos) = heatmap_rect.hover_pos() {
-            let relative_pos = hover_pos - rect.min;
-            let time_idx = ((relative_pos.x / cell_width) as usize).min(time_points.len() - 1);
-            let tissue_idx = ((relative_pos.y / cell_height) as usize).min(num_tissues - 1);
-            
-            if time_idx < heatmap_data.len() && tissue_idx < heatmap_data[time_idx].len() {
-                let loading = heatmap_data[time_idx][tissue_idx];
-                let time = time_points[time_idx];
+        // Handle immediate mouse tracking for real-time info display
+        if let Some(pointer_pos) = ui.ctx().pointer_interact_pos() {
+            if heatmap_response.rect.contains(pointer_pos) {
+                let relative_pos = pointer_pos - rect.min;
+                let time_idx = ((relative_pos.x / cell_width) as usize).min(time_points.len() - 1);
+                let tissue_idx = ((relative_pos.y / cell_height) as usize).min(num_tissues - 1);
                 
-                // Show tooltip
-                let tooltip_text = format!(
-                    "Tissue {}: {:.1}%\nTime: {:.1} min",
-                    tissue_idx + 1, loading, time
-                );
-                
-                heatmap_rect.on_hover_text(tooltip_text);
+                if time_idx < heatmap_data.len() && tissue_idx < heatmap_data[time_idx].len() {
+                    let loading = heatmap_data[time_idx][tissue_idx];
+                    let time = time_points[time_idx];
+                    
+                    // Show immediate info overlay
+                    let info_text = format!(
+                        "{:.1}mins, T{}, GF: {:.1}%",
+                        time, tissue_idx + 1, loading
+                    );
+                    
+                    // Draw info box near cursor
+                    let info_pos = pointer_pos + egui::Vec2::new(10.0, -20.0);
+                    let info_rect = egui::Rect::from_min_size(info_pos, egui::Vec2::new(120.0, 20.0));
+                    
+                    // Draw background
+                    painter.rect_filled(
+                        info_rect,
+                        4.0,
+                        egui::Color32::from_black_alpha(200)
+                    );
+                    painter.rect_stroke(
+                        info_rect,
+                        4.0,
+                        egui::Stroke::new(1.0, egui::Color32::WHITE),
+                        egui::StrokeKind::Middle
+                    );
+                    
+                    // Draw text
+                    painter.text(
+                        info_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        info_text,
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::WHITE
+                    );
+                }
             }
         }
     }
@@ -1066,9 +1128,11 @@ impl DivePlannerApp {
         
         for i in 0..16 {
             let tissue_ceiling = dive_computer_deco::ceiling::ceiling_with_gf(
+                self.gf_low,
                 self.gf_high, 
-                tissues[i], 
+                &tissues[i], 
                 i, 
+                self.surface_pressure,
                 true
             );
             
@@ -1125,7 +1189,7 @@ impl DivePlannerApp {
         }
         
         // Calculate final ceiling and decompression status
-        let (final_ceiling, controlling_tissue) = max_ceiling_with_gf(self.gf_high, &tissues);
+        let (final_ceiling, controlling_tissue) = max_ceiling_with_gf(self.gf_low, self.gf_high, &tissues);
         
         // Get all tissues requiring decompression
         let responsible_tissues = self.get_responsible_tissues(&tissues);

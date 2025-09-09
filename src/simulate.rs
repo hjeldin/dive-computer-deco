@@ -212,31 +212,20 @@ pub fn simulate_with_ascent_from_depth(
         } else if ascending && include_ascent {
             // ASCENT PHASE WITH DECOMPRESSION STOPS
             // First, check with GF Low to determine if we need any decompression
-            let (ceiling_with_gf_low, _) = max_ceiling_with_gf(params.gf_low, tissues);
+            let (ceiling_with_gf_low, _) = max_ceiling_with_gf(params.gf_low, params.gf_high, tissues);
             
             // Set first stop depth if not set
             if first_stop_depth.is_none() && ceiling_with_gf_low > 0 {
                 first_stop_depth = Some(ceiling_with_gf_low as f32);
             }
+
+            let (current_ceiling, _controlling_tissue) = max_ceiling_with_gf(params.gf_low, params.gf_high, tissues);
             
-            // Calculate current gradient factor based on depth
-            let current_gf = if let Some(first_stop) = first_stop_depth {
-                if depth <= 0.0 {
-                    params.gf_high
-                } else if depth >= first_stop {
-                    params.gf_low
-                } else {
-                    // Linear interpolation: GF Low at first stop, GF High at surface
-                    let depth_ratio = depth / first_stop;
-                    // Correct interpolation: GF increases from GF_low to GF_high as depth decreases
-                    params.gf_low + (params.gf_high - params.gf_low) * (1.0 - depth_ratio)
-                }
-            } else {
-                // No decompression required, use GF High
-                params.gf_high
-            };
-            
-            let (current_ceiling, _controlling_tissue) = max_ceiling_with_gf(current_gf, tissues);
+            // Debug output every 10 iterations to avoid spam
+            #[cfg(feature = "std")]
+            if iteration_count % 10 == 0 {
+                println!("Ascent: depth {:.1}m, ceiling {:.1}m, at_deco_stop: {}", depth, current_ceiling, at_deco_stop);
+            }
             
             if !at_deco_stop {
                 // Check if we need a decompression stop
@@ -287,18 +276,9 @@ pub fn simulate_with_ascent_from_depth(
                         accumulated_short_stop_time = 0.0;
                     }
                 } else if depth > 0.0 {
-                    // No deco stop needed, continue ascending
-                    // Use a more conservative ceiling check when close to surface
-                    let safety_ceiling = if depth < 6.0 {
-                        // Use a more conservative GF near surface to ensure complete decompression
-                        let conservative_gf = current_gf * 0.9;
-                        let (conservative_ceiling, _) = max_ceiling_with_gf(conservative_gf, tissues);
-                        conservative_ceiling
-                    } else {
-                        current_ceiling
-                    };
-                    
-                    if safety_ceiling == 0 || depth > safety_ceiling as f32 {
+                    // No decompression obligation - ascend directly to surface
+                    if current_ceiling == 0 {
+                        // Clear to ascend to surface
                         let depth_to_surface = depth;
                         let time_to_surface = depth_to_surface / params.ascent_speed;
                         let step = internal_step.min(time_to_surface);
@@ -306,30 +286,8 @@ pub fn simulate_with_ascent_from_depth(
                         depth -= params.ascent_speed * step;
                         if depth <= 0.0 {
                             depth = 0.0;
-                            amb_pressure = starting_ambient_pressure;
-                            
-                            // Final surface phase - allow tissues to offgas to surface pressure
-                            // This ensures no residual decompression obligation
-                            let surface_time_needed = 60.0; // 1 minute at surface
-                            let mut surface_time = 0.0;
-                            
-                            while surface_time < surface_time_needed {
-                                for i in 0..16 {
-                                    tissues[i] = calculate_tissue(tissues[i], i, amb_pressure, temperature, internal_step / 60.0);
-                                }
-                                
-                                dive_time += internal_step;
-                                surface_time += internal_step;
-                                output_accumulator += internal_step;
-                                
-                                if output_accumulator >= interval_in_seconds {
-                                    record_output(&mut outputs, depth, amb_pressure, tissues);
-                                    output_accumulator -= interval_in_seconds;
-                                }
-                            }
-                            
                             #[cfg(feature = "std")]
-                            println!("Reached surface! Total dive time: {:.1} minutes", dive_time / 60.0);
+                            println!("Reached surface - simulation complete");
                             break;
                         }
                         amb_pressure = depth / 10.0 + 1.0;
@@ -346,7 +304,7 @@ pub fn simulate_with_ascent_from_depth(
                             output_accumulator -= interval_in_seconds;
                         }
                     } else {
-                        // Need to wait at current depth - ceiling still constrains us
+                        // Ceiling constrains us - wait at current depth
                         amb_pressure = depth / 10.0 + 1.0;
                         
                         for i in 0..16 {
@@ -385,7 +343,7 @@ pub fn simulate_with_ascent_from_depth(
                 }
                 
                 // Check if we can leave the deco stop (ceiling has cleared)
-                let (new_ceiling, _) = max_ceiling_with_gf(current_gf, tissues);
+                let (new_ceiling, _) = max_ceiling_with_gf(params.gf_low, params.gf_high, tissues);
                 
                 // Check if we can leave this deco stop
                 if deco_stop_time >= 60.0 && (new_ceiling == 0 || new_ceiling as f32 + 0.5 < current_deco_depth) {
