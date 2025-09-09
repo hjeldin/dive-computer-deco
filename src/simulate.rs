@@ -111,6 +111,10 @@ pub fn simulate_with_ascent_from_depth(
     #[cfg(feature = "std")]
     println!("Starting dive simulation: descent -> bottom -> ascent with decompression");
 
+    // Record initial state at the starting depth
+    amb_pressure = starting_depth / 10.0 + starting_ambient_pressure;
+    record_output(&mut outputs, depth, amb_pressure, tissues);
+
     loop {
         iteration_count += 1;
         
