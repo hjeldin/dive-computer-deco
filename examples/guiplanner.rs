@@ -11,6 +11,127 @@ use dive_computer_deco::{
 use std::path::Path;
 use fitparser;
 
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+enum TankType {
+    Alu80,
+    Steel15L,
+    Steel12L,
+    Steel10L,
+    Alu63,
+    Steel8L,
+    Custom,
+}
+
+impl TankType {
+    fn name(&self) -> &'static str {
+        match self {
+            TankType::Alu80 => "Aluminum 80 cuft",
+            TankType::Steel15L => "Steel 15L",
+            TankType::Steel12L => "Steel 12L", 
+            TankType::Steel10L => "Steel 10L",
+            TankType::Alu63 => "Aluminum 63 cuft",
+            TankType::Steel8L => "Steel 8L",
+            TankType::Custom => "Custom Tank",
+        }
+    }
+    
+    fn water_volume_liters(&self) -> f32 {
+        match self {
+            TankType::Alu80 => 11.1,   // 80 cuft = ~11.1L water volume
+            TankType::Steel15L => 15.0,
+            TankType::Steel12L => 12.0,
+            TankType::Steel10L => 10.0,
+            TankType::Alu63 => 8.7,    // 63 cuft = ~8.7L water volume
+            TankType::Steel8L => 8.0,
+            TankType::Custom => 12.0,  // Default for custom
+        }
+    }
+    
+    fn working_pressure_bar(&self) -> f32 {
+        match self {
+            TankType::Alu80 => 207.0,    // 3000 psi
+            TankType::Steel15L => 232.0, // 15L at 232 bar
+            TankType::Steel12L => 232.0, // 12L at 232 bar
+            TankType::Steel10L => 232.0, // 10L at 232 bar
+            TankType::Alu63 => 207.0,    // 3000 psi
+            TankType::Steel8L => 200.0,  // 8L at 200 bar
+            TankType::Custom => 200.0,   // Default for custom
+        }
+    }
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct AirConsumption {
+    tank_type: TankType,
+    custom_volume: f32,      // Water volume in liters for custom tank
+    custom_pressure: f32,    // Working pressure in bar for custom tank
+    starting_pressure: f32,  // Starting pressure in bar
+    ending_pressure: Option<f32>, // Ending pressure in bar (for SAC calculation)
+    sac_rate: f32,          // Surface Air Consumption in L/min
+    calculated_sac: bool,    // Whether SAC was calculated from dive data
+}
+
+impl Default for AirConsumption {
+    fn default() -> Self {
+        Self {
+            tank_type: TankType::Alu80,
+            custom_volume: 12.0,
+            custom_pressure: 200.0,
+            starting_pressure: 200.0,
+            ending_pressure: None,
+            sac_rate: 20.0,
+            calculated_sac: false,
+        }
+    }
+}
+
+impl AirConsumption {
+    fn get_tank_volume(&self) -> f32 {
+        if self.tank_type == TankType::Custom {
+            self.custom_volume
+        } else {
+            self.tank_type.water_volume_liters()
+        }
+    }
+    
+    fn get_working_pressure(&self) -> f32 {
+        if self.tank_type == TankType::Custom {
+            self.custom_pressure
+        } else {
+            self.tank_type.working_pressure_bar()
+        }
+    }
+    
+    fn air_consumed_liters(&self, depth_m: f32, time_minutes: f32) -> f32 {
+        let pressure_factor = (depth_m / 10.0) + 1.0; // Pressure at depth
+        self.sac_rate * pressure_factor * time_minutes
+    }
+    
+    fn remaining_pressure(&self, consumed_liters: f32) -> f32 {
+        let tank_volume = self.get_tank_volume();
+        let consumed_bar = consumed_liters / tank_volume;
+        (self.starting_pressure - consumed_bar).max(0.0)
+    }
+    
+    fn calculate_sac_from_dive(&mut self, depths: &[f32], time_intervals: &[f32], ending_pressure: f32) {
+        if let Some(_) = self.ending_pressure {
+            let pressure_used = self.starting_pressure - ending_pressure;
+            let air_used_liters = pressure_used * self.get_tank_volume();
+            
+            // Calculate average depth weighted by time
+            let total_pressure_time: f32 = depths.iter()
+                .zip(time_intervals.iter())
+                .map(|(&depth, &time)| ((depth / 10.0) + 1.0) * time)
+                .sum();
+            
+            if total_pressure_time > 0.0 {
+                self.sac_rate = air_used_liters / total_pressure_time;
+                self.calculated_sac = true;
+            }
+        }
+    }
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct DiveStep {
     depth: f32,
@@ -66,12 +187,16 @@ struct DivePlannerApp {
     descent_speed: f32,
     ascent_speed: f32,
     
+    // Air consumption parameters
+    air_consumption: AirConsumption,
+    
     // Dive profile
     dive_steps: Vec<DiveStep>,
     
     // Simulation results
     simulation_results: Option<SimulationOutputs>,
     simulation_text: String,
+    air_remaining: Vec<f32>, // Air remaining at each time interval
     
     // FIT activity data
     fit_activity_data: Option<FitActivityData>,
@@ -80,6 +205,7 @@ struct DivePlannerApp {
     show_ceiling: bool,
     show_depth: bool,
     show_pressure: bool,
+    show_air_remaining: bool,
     show_fit_activity: bool,
     smoothing_window: usize, // Smoothing window size for FIT activity data
     active_tab: PlotTab,
@@ -99,13 +225,16 @@ impl Default for DivePlannerApp {
             surface_pressure: 1.0,
             descent_speed: 20.0,  // m/min
             ascent_speed: 10.0,   // m/min
+            air_consumption: AirConsumption::default(),
             dive_steps: vec![DiveStep::new()],
             simulation_results: None,
             simulation_text: String::new(),
+            air_remaining: Vec::new(),
             fit_activity_data: None,
             show_ceiling: true,
             show_depth: true,
             show_pressure: false,
+            show_air_remaining: true,
             show_fit_activity: true,
             smoothing_window: 5, // Default smoothing window size
             active_tab: PlotTab::DiveProfile,
@@ -219,14 +348,153 @@ impl DivePlannerApp {
         
         ui.add_space(8.0);
         ui.separator();
-        ui.add_space(4.0);       
+        ui.add_space(8.0);
+        
+        // Air consumption parameters
+        ui.heading("🫁 Air Consumption");
+        ui.add_space(4.0);
+        
+        egui::Grid::new("air_parameters_grid")
+            .num_columns(2)
+            .spacing([40.0, 8.0])
+            .show(ui, |ui| {
+                ui.label("Tank Type:");
+                let old_tank_type = self.air_consumption.tank_type;
+                egui::ComboBox::from_id_salt("tank_type")
+                    .selected_text(self.air_consumption.tank_type.name())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.air_consumption.tank_type, TankType::Alu80, TankType::Alu80.name());
+                        ui.selectable_value(&mut self.air_consumption.tank_type, TankType::Steel15L, TankType::Steel15L.name());
+                        ui.selectable_value(&mut self.air_consumption.tank_type, TankType::Steel12L, TankType::Steel12L.name());
+                        ui.selectable_value(&mut self.air_consumption.tank_type, TankType::Steel10L, TankType::Steel10L.name());
+                        ui.selectable_value(&mut self.air_consumption.tank_type, TankType::Alu63, TankType::Alu63.name());
+                        ui.selectable_value(&mut self.air_consumption.tank_type, TankType::Steel8L, TankType::Steel8L.name());
+                        ui.selectable_value(&mut self.air_consumption.tank_type, TankType::Custom, TankType::Custom.name());
+                    });
+                // Recalculate if tank type changed
+                if old_tank_type != self.air_consumption.tank_type {
+                    self.recalculate_air_consumption();
+                }
+                ui.end_row();
+                
+                // Show custom tank parameters if Custom is selected
+                if self.air_consumption.tank_type == TankType::Custom {
+                    ui.label("Volume:");
+                    let old_volume = self.air_consumption.custom_volume;
+                    ui.add(egui::DragValue::new(&mut self.air_consumption.custom_volume)
+                        .speed(0.1)
+                        .range(1.0..=30.0)
+                        .suffix(" L"));
+                    if old_volume != self.air_consumption.custom_volume {
+                        self.recalculate_air_consumption();
+                    }
+                    ui.end_row();
+                    
+                    ui.label("Working Pressure:");
+                    let old_pressure = self.air_consumption.custom_pressure;
+                    ui.add(egui::DragValue::new(&mut self.air_consumption.custom_pressure)
+                        .speed(1.0)
+                        .range(100.0..=300.0)
+                        .suffix(" bar"));
+                    if old_pressure != self.air_consumption.custom_pressure {
+                        self.recalculate_air_consumption();
+                    }
+                    ui.end_row();
+                }
+                
+                ui.label("Starting Pressure:");
+                let max_pressure = self.air_consumption.get_working_pressure();
+                let old_starting_pressure = self.air_consumption.starting_pressure;
+                ui.add(egui::DragValue::new(&mut self.air_consumption.starting_pressure)
+                    .speed(1.0)
+                    .range(50.0..=max_pressure)
+                    .suffix(" bar"));
+                if old_starting_pressure != self.air_consumption.starting_pressure {
+                    self.recalculate_air_consumption();
+                }
+                ui.end_row();
+                
+                ui.label("SAC Rate:");
+                ui.horizontal(|ui| {
+                    let old_sac_rate = self.air_consumption.sac_rate;
+                    ui.add(egui::DragValue::new(&mut self.air_consumption.sac_rate)
+                        .speed(0.5)
+                        .range(8.0..=50.0)
+                        .suffix(" L/min"));
+                    if old_sac_rate != self.air_consumption.sac_rate {
+                        self.air_consumption.calculated_sac = false; // Mark as manually set
+                        self.recalculate_air_consumption();
+                    }
+                    if self.air_consumption.calculated_sac {
+                        ui.colored_label(egui::Color32::GREEN, "(calculated)");
+                    }
+                });
+                ui.end_row();
+                
+                ui.label("Ending Pressure:");
+                ui.horizontal(|ui| {
+                    let mut has_ending = self.air_consumption.ending_pressure.is_some();
+                    let old_has_ending = has_ending;
+                    ui.checkbox(&mut has_ending, "");
+                    
+                    let mut ending_pressure_changed = false;
+                    let mut new_ending_pressure = None;
+                    
+                    if has_ending && self.air_consumption.ending_pressure.is_none() {
+                        self.air_consumption.ending_pressure = Some(50.0);
+                        ending_pressure_changed = true;
+                    } else if !has_ending {
+                        self.air_consumption.ending_pressure = None;
+                        self.air_consumption.calculated_sac = false;
+                        ending_pressure_changed = true;
+                    }
+                    
+                    if let Some(ref mut ending_pressure) = self.air_consumption.ending_pressure {
+                        let old_ending_pressure = *ending_pressure;
+                        ui.add(egui::DragValue::new(ending_pressure)
+                            .speed(1.0)
+                            .range(0.0..=self.air_consumption.starting_pressure)
+                            .suffix(" bar"));
+                        
+                        if old_ending_pressure != *ending_pressure || old_has_ending != has_ending {
+                            ending_pressure_changed = true;
+                            new_ending_pressure = Some(*ending_pressure);
+                        }
+                    }
+                    
+                    // Handle SAC calculation outside the borrow
+                    if ending_pressure_changed {
+                        if let Some(ending_pressure) = new_ending_pressure {
+                            if self.fit_activity_data.is_some() {
+                                self.calculate_sac_from_fit_data(ending_pressure);
+                            }
+                        }
+                        self.recalculate_air_consumption();
+                    }
+                });
+                ui.end_row();
+            });
+        
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+        
+        // Tank info display
+        ui.horizontal(|ui| {
+            ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "🗂️ Tank Info:");
+            let volume = self.air_consumption.get_tank_volume();
+            let pressure = self.air_consumption.get_working_pressure();
+            let total_air = volume * pressure;
+            ui.colored_label(egui::Color32::LIGHT_GRAY, 
+                format!("{:.1}L @ {:.0}bar = {:.0}L air", volume, pressure, total_air));
+        });
+        
         ui.horizontal(|ui| {
             ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "📊 Current GF:");
             let color = egui::Color32::LIGHT_GRAY;
             ui.colored_label(color, 
                 format!("{:.0}%/{:.0}%", self.gf_low * 100.0, self.gf_high * 100.0));
         });
-        
     }
     
     fn dive_profile_panel(&mut self, ui: &mut egui::Ui) {
@@ -311,7 +579,6 @@ impl DivePlannerApp {
         
         // Check if simulation can be run
         let gf_invalid = self.gf_low > self.gf_high;
-        let can_simulate = !gf_invalid && !self.dive_steps.is_empty();
         
         // Large simulation button
         let button_text = if gf_invalid {
@@ -394,10 +661,13 @@ impl DivePlannerApp {
                 ui.checkbox(&mut self.show_ceiling, "🚧 Ceiling");
                 ui.end_row();
                 ui.checkbox(&mut self.show_pressure, "📊 Pressure");
+                ui.checkbox(&mut self.show_air_remaining, "🫁 Air Remaining");
+                ui.end_row();
                 if self.fit_activity_data.is_some() {
                     ui.checkbox(&mut self.show_fit_activity, "🏊‍♀️ FIT Activity");
+                    ui.label(""); // Empty cell for alignment
+                    ui.end_row();
                 }
-                ui.end_row();
             });
         
         // Smoothing control for FIT data
@@ -517,7 +787,7 @@ impl DivePlannerApp {
         let plot = Plot::new("dive_profile")
             .height(plot_height)
             .legend(egui_plot::Legend::default())
-            .y_axis_label("Depth (m)")
+            .y_axis_label("Depth (m) / Pressure (bar)")
             .x_axis_label("Time (minutes)")
             .include_y(0.0);
         
@@ -576,6 +846,73 @@ impl DivePlannerApp {
                             .width(1.0)
                     );
                 }
+            }
+            
+            // Show air remaining if available (works for both simulation and FIT data)
+            if self.show_air_remaining && !self.air_remaining.is_empty() {
+                // Calculate depth range for scaling air pressure
+                let mut max_depth = 0.0_f32;
+                let mut min_depth = 0.0_f32;
+                
+                // Get depth range from appropriate data source
+                if let Some(ref results) = self.simulation_results {
+                    if !results.depths.is_empty() {
+                        max_depth = results.depths.iter().fold(0.0, |a, &b| a.max(b));
+                        min_depth = results.depths.iter().fold(max_depth, |a, &b| a.min(b));
+                    }
+                } else if let Some(ref fit_data) = self.fit_activity_data {
+                    if !fit_data.depths.is_empty() {
+                        max_depth = fit_data.depths.iter().fold(0.0, |a, &b| a.max(b));
+                        min_depth = fit_data.depths.iter().fold(max_depth, |a, &b| a.min(b));
+                    }
+                }
+                
+                // Calculate air pressure range for scaling
+                let max_air_pressure = self.air_remaining.iter().fold(0.0_f32, |a, &b| a.max(b));
+                let min_air_pressure = self.air_remaining.iter().fold(max_air_pressure, |a, &b| a.min(b));
+                let air_pressure_range = max_air_pressure - min_air_pressure;
+                
+                // Scale air pressure to depth range (but invert it since depth is negative in the plot)
+                let depth_range = max_depth - min_depth;
+                let scale_factor = if air_pressure_range > 0.0 && depth_range > 0.0 {
+                    depth_range / air_pressure_range
+                } else {
+                    1.0
+                };
+                
+                // Create time points based on data source
+                let air_points: PlotPoints = if let Some(ref _results) = self.simulation_results {
+                    // For simulation data, use 10-second intervals
+                    self.air_remaining
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &pressure)| {
+                            let time_minutes = i as f64 * 10.0 / 60.0;
+                            // Scale pressure to depth range and offset to be visible above surface
+                            let scaled_pressure = (pressure - min_air_pressure) * scale_factor;
+                            [time_minutes, scaled_pressure as f64] // Scaled pressure to match depth range
+                        })
+                        .collect()
+                } else if let Some(ref fit_data) = self.fit_activity_data {
+                    // For FIT data, use the actual timestamps
+                    self.air_remaining
+                        .iter()
+                        .zip(fit_data.timestamps.iter())
+                        .map(|(&pressure, &time)| {
+                            // Scale pressure to depth range and offset to be visible above surface
+                            let scaled_pressure = (pressure - min_air_pressure) * scale_factor;
+                            [time, scaled_pressure as f64] // Scaled pressure to match depth range
+                        })
+                        .collect()
+                } else {
+                    PlotPoints::new(vec![])
+                };
+                
+                plot_ui.line(
+                    Line::new(format!("Air Remaining ({:.0}-{:.0} bar)", min_air_pressure, max_air_pressure), air_points)
+                        .color(egui::Color32::LIGHT_BLUE)
+                        .width(2.0)
+                );
             }
             
             // Always show FIT activity data if available and enabled
@@ -672,7 +1009,7 @@ impl DivePlannerApp {
     
     fn secondary_plot(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label("Tissue Pressure vs Depth");
+            ui.label("Tissue Pressure vs Ambient Pressure");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Show All").clicked() {
                     self.tissue_visibility = [true; 16];
@@ -712,7 +1049,7 @@ impl DivePlannerApp {
             .height(plot_height)
             .legend(egui_plot::Legend::default())
             .y_axis_label("Absolute Tissue Pressure (bar)")
-            .x_axis_label("Depth (m)")
+            .x_axis_label("Ambient Pressure (bar)")
             .include_y(1.0);
         
         plot.show(ui, |plot_ui| {
@@ -749,8 +1086,9 @@ impl DivePlannerApp {
                             .enumerate()
                             .map(|(i, tissues)| {
                                 let depth = results.depths.get(i).unwrap_or(&0.0);
+                                let ambient_pressure = self.surface_pressure + (depth / 10.0); // Convert depth to pressure
                                 let tissue_pressure = tissues[tissue_idx].load_n2;
-                                [*depth as f64, tissue_pressure as f64]
+                                [ambient_pressure as f64, tissue_pressure as f64]
                             })
                             .collect();
                         
@@ -772,7 +1110,7 @@ impl DivePlannerApp {
                             .map(|&depth| {
                                 let ambient_pressure = self.surface_pressure + (depth / 10.0); // Convert depth to pressure
                                 let m_value = calculate_m_values(ambient_pressure, tissue_idx);
-                                [depth as f64, m_value as f64]
+                                [ambient_pressure as f64, m_value as f64]
                             })
                             .collect();
                         
@@ -783,10 +1121,117 @@ impl DivePlannerApp {
                                 .style(egui_plot::LineStyle::Dashed { length: 3.0 })
                         );
                     }
+
+                    // Add bisector line (x = y) for first quadrant reference
+                    let max_pressure = results.depths.iter()
+                        .map(|&depth| self.surface_pressure + (depth / 10.0))
+                        .fold(self.surface_pressure, f32::max);
+                    let bisector_points: PlotPoints = vec![
+                        [self.surface_pressure as f64, self.surface_pressure as f64],
+                        [max_pressure as f64, max_pressure as f64]
+                    ].into();
+                    
+                    plot_ui.line(
+                        Line::new("Bisector (Ambient = Tissue)", bisector_points)
+                            .color(egui::Color32::WHITE)
+                            .width(1.5)
+                            .style(egui_plot::LineStyle::Dashed { length: 2.0 })
+                    );
+
+                    // Plot gradient factor lines for each tissue compartment
+                    for tissue_idx in 0..16 {
+                        if !self.tissue_visibility[tissue_idx] {
+                            continue; // Skip if tissue is not visible
+                        }
+                        
+                        let gf_low_points: PlotPoints = results.depths
+                            .iter()
+                            .map(|&depth| {
+                                let ambient_pressure = self.surface_pressure + (depth / 10.0);
+                                let m_value = calculate_m_values(ambient_pressure, tissue_idx);
+                                
+                                // GF low line: interpolate between bisector and M-value
+                                // Start point: bisector (ambient = tissue)
+                                // End point: M-value 
+                                // Interpolation: bisector + gf_low * (m_value - bisector)
+                                let bisector_value = ambient_pressure;
+                                let gf_low_value = bisector_value + self.gf_low * (m_value - bisector_value);
+                                
+                                [ambient_pressure as f64, gf_low_value as f64]
+                            })
+                            .collect();
+                        
+                        plot_ui.line(
+                            Line::new(format!("GF Low {} ({}%)", tissue_idx + 1, (self.gf_low * 100.0) as u8), gf_low_points)
+                                .color(colors[tissue_idx])
+                                .width(1.0)
+                                .style(egui_plot::LineStyle::Dotted { spacing: 2.0 })
+                        );
+
+                        let gf_high_points: PlotPoints = results.depths
+                            .iter()
+                            .map(|&depth| {
+                                let ambient_pressure = self.surface_pressure + (depth / 10.0);
+                                let m_value = calculate_m_values(ambient_pressure, tissue_idx);
+                                
+                                // GF high line: interpolate between bisector and M-value
+                                // Start point: bisector (ambient = tissue)
+                                // End point: M-value
+                                // Interpolation: bisector + gf_high * (m_value - bisector)
+                                let bisector_value = ambient_pressure;
+                                let gf_high_value = bisector_value + self.gf_high * (m_value - bisector_value);
+                                
+                                [ambient_pressure as f64, gf_high_value as f64]
+                            })
+                            .collect();
+                        
+                        plot_ui.line(
+                            Line::new(format!("GF High {} ({}%)", tissue_idx + 1, (self.gf_high * 100.0) as u8), gf_high_points)
+                                .color(colors[tissue_idx])
+                                .width(1.2)
+                                .style(egui_plot::LineStyle::Dotted { spacing: 4.0 })
+                        );
+                    }
+
+                    // Add gradient factor profile line that connects GF High at shallow to GF Low at deep depths
+                    if self.tissue_visibility.iter().any(|&visible| visible) {
+                        // Find the pressure range
+                        let min_pressure = self.surface_pressure;
+                        let max_pressure = results.depths.iter()
+                            .map(|&depth| self.surface_pressure + (depth / 10.0))
+                            .fold(self.surface_pressure, f32::max);
+                        
+                        // Use the first visible tissue's M-value for calculating start and end points
+                        let first_visible_tissue = self.tissue_visibility.iter()
+                            .position(|&visible| visible)
+                            .unwrap_or(0);
+                        
+                        // Calculate start point (shallow, GF High)
+                        let start_m_value = calculate_m_values(min_pressure, first_visible_tissue);
+                        let start_bisector = min_pressure;
+                        let start_y = start_bisector + self.gf_high * (start_m_value - start_bisector);
+                        
+                        // Calculate end point (deep, GF Low)
+                        let end_m_value = calculate_m_values(max_pressure, first_visible_tissue);
+                        let end_bisector = max_pressure;
+                        let end_y = end_bisector + self.gf_low * (end_m_value - end_bisector);
+                        
+                        // Create a straight line from start to end
+                        let gf_profile_points: PlotPoints = vec![
+                            [min_pressure as f64, start_y as f64],
+                            [max_pressure as f64, end_y as f64]
+                        ].into();
+                        
+                        plot_ui.line(
+                            Line::new(format!("GF Profile ({}% → {}%)", (self.gf_high * 100.0) as u8, (self.gf_low * 100.0) as u8), gf_profile_points)
+                                .color(egui::Color32::YELLOW)
+                                .width(2.0)
+                        );
+                    }
                 }
             } else {
                 // Show placeholder when no simulation results
-                let placeholder_points: PlotPoints = vec![[0.0, 1.0], [30.0, 1.0]].into();
+                let placeholder_points: PlotPoints = vec![[1.0, 1.0], [4.0, 1.0]].into();
                 plot_ui.line(
                     Line::new("No data - run simulation", placeholder_points)
                         .color(egui::Color32::GRAY)
@@ -840,7 +1285,7 @@ impl DivePlannerApp {
         let num_tissues = 16;
         
         // Calculate tissue loading percentages for each time point
-        let mut heatmap_data: Vec<Vec<f32>> = Vec::new();
+        let heatmap_data: Vec<Vec<f32>> = Vec::new();
         
         // for (time_idx, tissues) in results.tissues_per_interval.iter().enumerate() {
         //     let mut tissue_loadings = Vec::new();
@@ -1123,6 +1568,134 @@ impl DivePlannerApp {
         );
     }
     
+    fn calculate_air_consumption(&mut self, results: &SimulationOutputs) {
+        self.air_remaining.clear();
+        
+        if results.depths.is_empty() {
+            return;
+        }
+        
+        let mut total_consumed_liters = 0.0;
+        
+        for &depth in results.depths.iter() {
+            // Calculate time interval (10 seconds = 1/6 minute)
+            let time_interval_minutes = 10.0 / 60.0;
+            
+            // Calculate air consumed during this interval
+            let air_consumed_this_interval = self.air_consumption.air_consumed_liters(depth, time_interval_minutes);
+            total_consumed_liters += air_consumed_this_interval;
+            
+            // Calculate remaining pressure
+            let remaining_pressure = self.air_consumption.remaining_pressure(total_consumed_liters);
+            self.air_remaining.push(remaining_pressure);
+        }
+    }
+    
+    fn calculate_air_consumption_for_fit(&mut self) {
+        self.air_remaining.clear();
+        
+        if let Some(ref fit_data) = self.fit_activity_data {
+            if fit_data.depths.is_empty() || fit_data.timestamps.is_empty() {
+                return;
+            }
+            
+            let mut total_consumed_liters = 0.0;
+            let mut prev_time = 0.0_f64;
+            
+            for (i, (&depth, &time)) in fit_data.depths.iter().zip(fit_data.timestamps.iter()).enumerate() {
+                // Calculate time interval
+                let time_interval_minutes = if i == 0 {
+                    0.0 // No consumption for the first data point
+                } else {
+                    (time - prev_time) as f32
+                };
+                
+                // Calculate air consumed during this interval
+                let air_consumed_this_interval = self.air_consumption.air_consumed_liters(depth, time_interval_minutes);
+                total_consumed_liters += air_consumed_this_interval;
+                
+                // Calculate remaining pressure
+                let remaining_pressure = self.air_consumption.remaining_pressure(total_consumed_liters);
+                self.air_remaining.push(remaining_pressure);
+                
+                prev_time = time;
+            }
+        }
+    }
+    
+    fn calculate_sac_from_fit_data(&mut self, ending_pressure: f32) {
+        if let Some(ref fit_data) = self.fit_activity_data {
+            if fit_data.depths.is_empty() || fit_data.timestamps.is_empty() {
+                return;
+            }
+            
+            let pressure_used = self.air_consumption.starting_pressure - ending_pressure;
+            let air_used_liters = pressure_used * self.air_consumption.get_tank_volume();
+            
+            // Calculate total pressure-time (depth-adjusted time)
+            let mut total_pressure_time = 0.0_f32;
+            let mut prev_time = 0.0_f64;
+            
+            for (i, (&depth, &time)) in fit_data.depths.iter().zip(fit_data.timestamps.iter()).enumerate() {
+                if i > 0 {
+                    let time_interval = (time - prev_time) as f32;
+                    let pressure_factor = (depth / 10.0) + 1.0;
+                    total_pressure_time += pressure_factor * time_interval;
+                }
+                prev_time = time;
+            }
+            
+            if total_pressure_time > 0.0 {
+                self.air_consumption.sac_rate = air_used_liters / total_pressure_time;
+                self.air_consumption.calculated_sac = true;
+                
+                // Recalculate air consumption with new SAC rate
+                self.calculate_air_consumption_for_fit();
+            }
+        }
+    }
+    
+    fn recalculate_air_consumption(&mut self) {
+        // Update text results if we have either simulation results or FIT data
+        if self.simulation_results.is_some() {
+            // Recalculate for simulation data
+            if let Some(ref results) = self.simulation_results.clone() {
+                self.calculate_air_consumption(&results);
+            }
+        } else if self.fit_activity_data.is_some() {
+            // Recalculate for FIT data
+            self.calculate_air_consumption_for_fit();
+            
+            // Update the simulation text with new air consumption results
+            if let Some(ref fit_data) = self.fit_activity_data {
+                if !self.air_remaining.is_empty() {
+                    let total_dive_time = *fit_data.timestamps.last().unwrap_or(&0.0);
+                    let final_air_pressure = self.air_remaining.last().unwrap_or(&0.0);
+                    let total_air_consumed = self.air_consumption.starting_pressure - final_air_pressure;
+                    let total_air_consumed_liters = total_air_consumed * self.air_consumption.get_tank_volume();
+                    let average_consumption = if total_dive_time > 0.0 { total_air_consumed_liters / (total_dive_time as f32) } else { 0.0 };
+                    
+                    let mut result_text = format!("Loaded FIT activity with {} data points\n", fit_data.depths.len());
+                    result_text.push_str(&format!("\n=== AIR CONSUMPTION (FIT Activity) ===\n"));
+                    result_text.push_str(&format!("Tank: {} ({:.1}L @ {:.0} bar)\n", 
+                        self.air_consumption.tank_type.name(),
+                        self.air_consumption.get_tank_volume(),
+                        self.air_consumption.get_working_pressure()));
+                    result_text.push_str(&format!("Starting Pressure: {:.0} bar\n", self.air_consumption.starting_pressure));
+                    result_text.push_str(&format!("Final Tank Pressure: {:.0} bar\n", final_air_pressure));
+                    result_text.push_str(&format!("Total Air Consumed: {:.0} bar ({:.0} L)\n", total_air_consumed, total_air_consumed_liters));
+                    result_text.push_str(&format!("Average Consumption Rate: {:.1} L/min\n", average_consumption));
+                    result_text.push_str(&format!("SAC Rate: {:.1} L/min{}\n", 
+                        self.air_consumption.sac_rate,
+                        if self.air_consumption.calculated_sac { " (calculated)" } else { "" }));
+                    result_text.push_str(&format!("Total Dive Time: {:.1} minutes\n", total_dive_time));
+                    
+                    self.simulation_text = result_text;
+                }
+            }
+        }
+    }
+    
     fn get_responsible_tissues(&self, tissues: &[Tissue; 16]) -> Vec<(usize, u32, f32)> {
         let mut responsible_tissues = Vec::new();
         
@@ -1177,10 +1750,37 @@ impl DivePlannerApp {
         dive_text.push_str(&format!("Descent Speed: {:.1} m/min\n", self.descent_speed));
         dive_text.push_str(&format!("Ascent Speed: {:.1} m/min\n\n", self.ascent_speed));
         
+        // Add air consumption info
+        dive_text.push_str(&format!("=== AIR CONSUMPTION ===\n"));
+        dive_text.push_str(&format!("Tank: {} ({:.1}L @ {:.0} bar)\n", 
+            self.air_consumption.tank_type.name(),
+            self.air_consumption.get_tank_volume(),
+            self.air_consumption.get_working_pressure()));
+        dive_text.push_str(&format!("Starting Pressure: {:.0} bar\n", self.air_consumption.starting_pressure));
+        dive_text.push_str(&format!("SAC Rate: {:.1} L/min{}\n", 
+            self.air_consumption.sac_rate,
+            if self.air_consumption.calculated_sac { " (calculated)" } else { "" }));
+        if let Some(ending_pressure) = self.air_consumption.ending_pressure {
+            dive_text.push_str(&format!("Target Ending Pressure: {:.0} bar\n", ending_pressure));
+        }
+        dive_text.push_str("\n");
+        
         let mut total_runtime = 0.0;
 
         // Create a continuous simulation for all dive steps
         let all_results = self.simulate_dive_steps(&mut dive_params, &mut tissues, temperature);
+        
+        // Calculate air consumption for each time interval
+        self.calculate_air_consumption(&all_results);
+        
+        // Calculate SAC rate if ending pressure is provided
+        if let Some(ending_pressure) = self.air_consumption.ending_pressure {
+            let time_intervals: Vec<f32> = vec![10.0 / 60.0; all_results.depths.len()]; // 10-second intervals in minutes
+            self.air_consumption.calculate_sac_from_dive(&all_results.depths, &time_intervals, ending_pressure);
+            
+            // Recalculate air consumption with new SAC rate
+            self.calculate_air_consumption(&all_results);
+        }
         
         for (step_num, step) in self.dive_steps.iter().enumerate() {
             dive_text.push_str(&format!("Step {}: {}m for {:.1} minutes\n", 
@@ -1213,6 +1813,23 @@ impl DivePlannerApp {
         dive_text.push_str(&format!("Total Decompression Time: {:.1} minutes\n", total_deco_time));
         dive_text.push_str(&format!("Final Ceiling: {}m\n", final_ceiling));
         dive_text.push_str(&format!("Controlling Tissue: {}\n", controlling_tissue + 1));
+        
+        // Add air consumption results
+        if !self.air_remaining.is_empty() {
+            let final_air_pressure = self.air_remaining.last().unwrap_or(&0.0);
+            let total_air_consumed = self.air_consumption.starting_pressure - final_air_pressure;
+            let total_air_consumed_liters = total_air_consumed * self.air_consumption.get_tank_volume();
+            let average_consumption = if total_dive_time > 0.0 { total_air_consumed_liters / total_dive_time } else { 0.0 };
+            
+            dive_text.push_str(&format!("\n=== AIR CONSUMPTION RESULTS ===\n"));
+            dive_text.push_str(&format!("Final Tank Pressure: {:.0} bar\n", final_air_pressure));
+            dive_text.push_str(&format!("Total Air Consumed: {:.0} bar ({:.0} L)\n", total_air_consumed, total_air_consumed_liters));
+            dive_text.push_str(&format!("Average Consumption Rate: {:.1} L/min\n", average_consumption));
+            
+            if self.air_consumption.calculated_sac {
+                dive_text.push_str(&format!("Calculated SAC Rate: {:.1} L/min\n", self.air_consumption.sac_rate));
+            }
+        }
         
         if final_ceiling > 0 || !deco_stops.is_empty() {
             dive_text.push_str(&format!("\n⚠️  DECOMPRESSION REQUIRED ⚠️\n"));
@@ -1520,11 +2137,47 @@ impl DivePlannerApp {
         
         if !timestamps.is_empty() && !depths.is_empty() {
             let data_points = timestamps.len();
+            let total_dive_time = *timestamps.last().unwrap_or(&0.0);
+            
             self.fit_activity_data = Some(FitActivityData {
                 timestamps,
                 depths,
             });
-            self.simulation_text = format!("Loaded FIT activity with {} data points", data_points);
+            
+            // Calculate air consumption for FIT activity
+            self.calculate_air_consumption_for_fit();
+            
+            let mut result_text = format!("Loaded FIT activity with {} data points\n", data_points);
+            
+            // Add air consumption results if available
+            if !self.air_remaining.is_empty() {
+                let final_air_pressure = self.air_remaining.last().unwrap_or(&0.0);
+                let total_air_consumed = self.air_consumption.starting_pressure - final_air_pressure;
+                let total_air_consumed_liters = total_air_consumed * self.air_consumption.get_tank_volume();
+                let average_consumption = if total_dive_time > 0.0 { total_air_consumed_liters / (total_dive_time as f32) } else { 0.0 };
+                
+                result_text.push_str(&format!("\n=== AIR CONSUMPTION (FIT Activity) ===\n"));
+                result_text.push_str(&format!("Tank: {} ({:.1}L @ {:.0} bar)\n", 
+                    self.air_consumption.tank_type.name(),
+                    self.air_consumption.get_tank_volume(),
+                    self.air_consumption.get_working_pressure()));
+                result_text.push_str(&format!("Starting Pressure: {:.0} bar\n", self.air_consumption.starting_pressure));
+                result_text.push_str(&format!("Final Tank Pressure: {:.0} bar\n", final_air_pressure));
+                result_text.push_str(&format!("Total Air Consumed: {:.0} bar ({:.0} L)\n", total_air_consumed, total_air_consumed_liters));
+                result_text.push_str(&format!("Average Consumption Rate: {:.1} L/min\n", average_consumption));
+                result_text.push_str(&format!("SAC Rate: {:.1} L/min{}\n", 
+                    self.air_consumption.sac_rate,
+                    if self.air_consumption.calculated_sac { " (calculated)" } else { "" }));
+                result_text.push_str(&format!("Total Dive Time: {:.1} minutes\n", total_dive_time));
+                
+                // Calculate SAC rate if ending pressure is provided
+                if let Some(ending_pressure) = self.air_consumption.ending_pressure {
+                    self.calculate_sac_from_fit_data(ending_pressure);
+                    result_text.push_str(&format!("Calculated SAC from ending pressure: {:.1} L/min\n", self.air_consumption.sac_rate));
+                }
+            }
+            
+            self.simulation_text = result_text;
         } else {
             self.simulation_text = "No valid depth data found in FIT file".to_string();
         }

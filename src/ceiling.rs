@@ -61,6 +61,7 @@ pub fn ceiling_with_gf(
     let bn2: f32 = ZhL16cGf::N2_B[tissue_index];
     let ahe: f32 = ZhL16cGf::HE_A[tissue_index];
     let bhe: f32 = ZhL16cGf::HE_B[tissue_index];
+    
 
     let a = ((an2 * pn2) + (ahe * phe)) / p_total;
     let b = ((bn2 * pn2) + (bhe * phe)) / p_total;
